@@ -1060,6 +1060,7 @@ const PDFViewerApplication = {
 
   setTitle(title = this._title) {
     this._title = title;
+    console.log("debug: title", title);
 
     if (this.isViewerEmbedded) {
       // Embedded PDF viewers should not be changing their parent page's title.
@@ -1067,6 +1068,7 @@ const PDFViewerApplication = {
     }
     const editorIndicator =
       this._hasAnnotationEditors && !this.pdfRenderingQueue.printing;
+    console.log("debug: doctitle", `${editorIndicator ? "* " : ""}${title}`);
     document.title = `${editorIndicator ? "* " : ""}${title}`;
   },
 
@@ -1741,7 +1743,9 @@ const PDFViewerApplication = {
 
     if (pdfTitle) {
       this.setTitle(
-        `${pdfTitle} - ${this._contentDispositionFilename || this._title}`
+        // note: 找到你了，如果有pdf的标题的时候，不需要设置pdf标题-pdf文件名，只需要标题
+        // `${pdfTitle} - ${this._contentDispositionFilename || this._title}`
+        `${pdfTitle}`
       );
     } else if (this._contentDispositionFilename) {
       this.setTitle(this._contentDispositionFilename);
