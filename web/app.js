@@ -1268,7 +1268,8 @@ const PDFViewerApplication = {
     } catch {
       // When the PDF document isn't ready, simply download using the URL.
     }
-    this.downloadManager.download(data, this._downloadUrl, this._docFilename);
+    this.downloadManager.download(data, this._downloadUrl, this._docTitle);
+    console.log("debug: this._docFilename next", this);
   },
 
   async save() {
