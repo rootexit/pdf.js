@@ -738,7 +738,6 @@ const PDFViewerApplication = {
         downloadUrl === url ? this.baseUrl : downloadUrl.split("#")[0];
     }
     let title = getPdfFilenameFromUrl(url, "");
-    console.log("debug: title", title);
     if (!title) {
       try {
         title = decodeURIComponent(getFilenameFromUrl(url)) || url;
@@ -756,7 +755,6 @@ const PDFViewerApplication = {
       // Embedded PDF viewers should not be changing their parent page's title.
       return;
     }
-    // console.log("debug: doctitle", `${editorIndicator ? "* " : ""}${title}`);
     document.title = title;
   },
 
@@ -968,13 +966,14 @@ const PDFViewerApplication = {
 
   async download({ sourceEventType = "download" } = {}) {
     const url = this._downloadUrl,
-      filename = this._docFilename;
+      metadataTitle = this.metadata?.get("dc:title"),
+      filename = `${metadataTitle}.pdf`;
+    // const metadataTitle = this.metadata?.get("dc:title");
     try {
       this._ensureDownloadComplete();
 
       const data = await this.pdfDocument.getData();
       const blob = new Blob([data], { type: "application/pdf" });
-
       await this.downloadManager.download(blob, url, filename, sourceEventType);
     } catch (reason) {
       // When the PDF document isn't ready, or the PDF file is still
@@ -1535,9 +1534,7 @@ const PDFViewerApplication = {
       }
     }
     if (pdfTitle) {
-      this.setTitle(
-        `${pdfTitle} - ${contentDispositionFilename || document.title}`
-      );
+      this.setTitle(`${pdfTitle}`);
     } else if (contentDispositionFilename) {
       this.setTitle(contentDispositionFilename);
     }

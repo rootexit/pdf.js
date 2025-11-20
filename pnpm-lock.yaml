@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      pdfjs-dist:
-        specifier: link:build/dist
-        version: link:build/dist
     devDependencies:
       '@babel/core':
         specifier: ^7.17.10
