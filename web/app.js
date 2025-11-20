@@ -2094,11 +2094,9 @@ let validateFileURL;
 if (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) {
   const HOSTED_VIEWER_ORIGINS = [
     "null",
-    "http://localhost:8888",
+    "https://newscdn.lego.cn",
     "http://mozilla.github.io",
     "https://mozilla.github.io",
-    "https://cdn.lilsite.com",
-    "https://dev-cdn.lilsite.com",
   ];
   validateFileURL = function (file) {
     if (!file) {
