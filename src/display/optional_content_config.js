@@ -12,115 +12,52 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-import {
-  info,
-  RenderingIntentFlag,
-  unreachable,
-  warn,
-} from "../shared/util.js";
-import { MurmurHash3_64 } from "../shared/murmurhash3.js";
-
-const INTERNAL = Symbol("INTERNAL");
+import { objectFromMap, warn } from "../shared/util.js";
 
 class OptionalContentGroup {
-  #isDisplay = false;
-
-  #isPrint = false;
-
-  #userSet = false;
-
-  #visible = true;
-
-  constructor(renderingIntent, { name, intent, usage, rbGroups }) {
-    this.#isDisplay = !!(renderingIntent & RenderingIntentFlag.DISPLAY);
-    this.#isPrint = !!(renderingIntent & RenderingIntentFlag.PRINT);
-
+  constructor(name, intent) {
+    this.visible = true;
     this.name = name;
     this.intent = intent;
-    this.usage = usage;
-    this.rbGroups = rbGroups;
-  }
-
-  /**
-   * @type {boolean}
-   */
-  get visible() {
-    if (this.#userSet) {
-      return this.#visible;
-    }
-    if (!this.#visible) {
-      return false;
-    }
-    const { print, view } = this.usage;
-
-    if (this.#isDisplay) {
-      return view?.viewState !== "OFF";
-    } else if (this.#isPrint) {
-      return print?.printState !== "OFF";
-    }
-    return true;
-  }
-
-  /**
-   * @ignore
-   */
-  _setVisible(internal, visible, userSet = false) {
-    if (internal !== INTERNAL) {
-      unreachable("Internal method `_setVisible` called.");
-    }
-    this.#userSet = userSet;
-    this.#visible = visible;
   }
 }
 
 class OptionalContentConfig {
-  #cachedGetHash = null;
-
-  #groups = new Map();
-
-  #initialHash = null;
-
-  #order = null;
-
-  constructor(data, renderingIntent = RenderingIntentFlag.DISPLAY) {
-    this.renderingIntent = renderingIntent;
-
+  constructor(data) {
     this.name = null;
     this.creator = null;
+    this._order = null;
+    this._groups = new Map();
 
     if (data === null) {
       return;
     }
     this.name = data.name;
     this.creator = data.creator;
-    this.#order = data.order;
+    this._order = data.order;
     for (const group of data.groups) {
-      this.#groups.set(
+      this._groups.set(
         group.id,
-        new OptionalContentGroup(renderingIntent, group)
+        new OptionalContentGroup(group.name, group.intent)
       );
     }
 
     if (data.baseState === "OFF") {
-      for (const group of this.#groups.values()) {
-        group._setVisible(INTERNAL, false);
+      for (const group of this._groups) {
+        group.visible = false;
       }
     }
 
     for (const on of data.on) {
-      this.#groups.get(on)._setVisible(INTERNAL, true);
+      this._groups.get(on).visible = true;
     }
 
     for (const off of data.off) {
-      this.#groups.get(off)._setVisible(INTERNAL, false);
+      this._groups.get(off).visible = false;
     }
-
-    // The following code must always run *last* in the constructor.
-    this.#initialHash = this.getHash();
   }
 
-  #evaluateVisibilityExpression(array) {
+  _evaluateVisibilityExpression(array) {
     const length = array.length;
     if (length < 2) {
       return true;
@@ -130,9 +67,9 @@ class OptionalContentConfig {
       const element = array[i];
       let state;
       if (Array.isArray(element)) {
-        state = this.#evaluateVisibilityExpression(element);
-      } else if (this.#groups.has(element)) {
-        state = this.#groups.get(element).visible;
+        state = this._evaluateVisibilityExpression(element);
+      } else if (this._groups.has(element)) {
+        state = this._groups.get(element).visible;
       } else {
         warn(`Optional content group not found: ${element}`);
         return true;
@@ -158,65 +95,65 @@ class OptionalContentConfig {
   }
 
   isVisible(group) {
-    if (this.#groups.size === 0) {
+    if (this._groups.size === 0) {
       return true;
     }
     if (!group) {
-      info("Optional content group not defined.");
+      warn("Optional content group not defined.");
       return true;
     }
     if (group.type === "OCG") {
-      if (!this.#groups.has(group.id)) {
+      if (!this._groups.has(group.id)) {
         warn(`Optional content group not found: ${group.id}`);
         return true;
       }
-      return this.#groups.get(group.id).visible;
+      return this._groups.get(group.id).visible;
     } else if (group.type === "OCMD") {
       // Per the spec, the expression should be preferred if available.
       if (group.expression) {
-        return this.#evaluateVisibilityExpression(group.expression);
+        return this._evaluateVisibilityExpression(group.expression);
       }
       if (!group.policy || group.policy === "AnyOn") {
         // Default
         for (const id of group.ids) {
-          if (!this.#groups.has(id)) {
+          if (!this._groups.has(id)) {
             warn(`Optional content group not found: ${id}`);
             return true;
           }
-          if (this.#groups.get(id).visible) {
+          if (this._groups.get(id).visible) {
             return true;
           }
         }
         return false;
       } else if (group.policy === "AllOn") {
         for (const id of group.ids) {
-          if (!this.#groups.has(id)) {
+          if (!this._groups.has(id)) {
             warn(`Optional content group not found: ${id}`);
             return true;
           }
-          if (!this.#groups.get(id).visible) {
+          if (!this._groups.get(id).visible) {
             return false;
           }
         }
         return true;
       } else if (group.policy === "AnyOff") {
         for (const id of group.ids) {
-          if (!this.#groups.has(id)) {
+          if (!this._groups.has(id)) {
             warn(`Optional content group not found: ${id}`);
             return true;
           }
-          if (!this.#groups.get(id).visible) {
+          if (!this._groups.get(id).visible) {
             return true;
           }
         }
         return false;
       } else if (group.policy === "AllOff") {
         for (const id of group.ids) {
-          if (!this.#groups.has(id)) {
+          if (!this._groups.has(id)) {
             warn(`Optional content group not found: ${id}`);
             return true;
           }
-          if (this.#groups.get(id).visible) {
+          if (this._groups.get(id).visible) {
             return false;
           }
         }
@@ -229,95 +166,30 @@ class OptionalContentConfig {
     return true;
   }
 
-  setVisibility(id, visible = true, preserveRB = true) {
-    const group = this.#groups.get(id);
-    if (!group) {
+  setVisibility(id, visible = true) {
+    if (!this._groups.has(id)) {
       warn(`Optional content group not found: ${id}`);
       return;
     }
-
-    // If the visibility is about to be set to `true` and the group belongs to
-    // any radiobutton groups, hide all other OCGs in these radiobutton groups,
-    // provided that radiobutton state relationships are to be preserved.
-    if (preserveRB && visible && group.rbGroups.length) {
-      for (const rbGroup of group.rbGroups) {
-        for (const otherId of rbGroup) {
-          if (otherId !== id) {
-            this.#groups.get(otherId)?._setVisible(INTERNAL, false, true);
-          }
-        }
-      }
-    }
-
-    group._setVisible(INTERNAL, !!visible, /* userSet = */ true);
-
-    this.#cachedGetHash = null;
-  }
-
-  setOCGState({ state, preserveRB }) {
-    let operator;
-
-    for (const elem of state) {
-      switch (elem) {
-        case "ON":
-        case "OFF":
-        case "Toggle":
-          operator = elem;
-          continue;
-      }
-
-      const group = this.#groups.get(elem);
-      if (!group) {
-        continue;
-      }
-      switch (operator) {
-        case "ON":
-          this.setVisibility(elem, true, preserveRB);
-          break;
-        case "OFF":
-          this.setVisibility(elem, false, preserveRB);
-          break;
-        case "Toggle":
-          this.setVisibility(elem, !group.visible, preserveRB);
-          break;
-      }
-    }
-
-    this.#cachedGetHash = null;
-  }
-
-  get hasInitialVisibility() {
-    return this.#initialHash === null || this.getHash() === this.#initialHash;
+    this._groups.get(id).visible = !!visible;
   }
 
   getOrder() {
-    if (!this.#groups.size) {
+    if (!this._groups.size) {
       return null;
     }
-    if (this.#order) {
-      return this.#order.slice();
+    if (this._order) {
+      return this._order.slice();
     }
-    return [...this.#groups.keys()];
+    return Array.from(this._groups.keys());
+  }
+
+  getGroups() {
+    return this._groups.size > 0 ? objectFromMap(this._groups) : null;
   }
 
   getGroup(id) {
-    return this.#groups.get(id) || null;
-  }
-
-  getHash() {
-    if (this.#cachedGetHash !== null) {
-      return this.#cachedGetHash;
-    }
-    const hash = new MurmurHash3_64();
-
-    for (const [id, group] of this.#groups) {
-      hash.update(`${id}:${group.visible}`);
-    }
-    return (this.#cachedGetHash = hash.hexdigest());
-  }
-
-  [Symbol.iterator]() {
-    return this.#groups.entries();
+    return this._groups.get(id) || null;
   }
 }
 

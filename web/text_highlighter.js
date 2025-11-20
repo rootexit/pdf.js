@@ -29,8 +29,6 @@
  * either the text layer or XFA layer depending on the type of document.
  */
 class TextHighlighter {
-  #eventAbortController = null;
-
   /**
    * @param {TextHighlighterOptions} options
    */
@@ -39,6 +37,7 @@ class TextHighlighter {
     this.matches = [];
     this.eventBus = eventBus;
     this.pageIdx = pageIndex;
+    this._onUpdateTextLayerMatches = null;
     this.textDivs = null;
     this.textContentItemsStr = null;
     this.enabled = false;
@@ -70,18 +69,15 @@ class TextHighlighter {
       throw new Error("TextHighlighter is already enabled.");
     }
     this.enabled = true;
-
-    if (!this.#eventAbortController) {
-      this.#eventAbortController = new AbortController();
-
+    if (!this._onUpdateTextLayerMatches) {
+      this._onUpdateTextLayerMatches = evt => {
+        if (evt.pageIndex === this.pageIdx || evt.pageIndex === -1) {
+          this._updateMatches();
+        }
+      };
       this.eventBus._on(
         "updatetextlayermatches",
-        evt => {
-          if (evt.pageIndex === this.pageIdx || evt.pageIndex === -1) {
-            this._updateMatches();
-          }
-        },
-        { signal: this.#eventAbortController.signal }
+        this._onUpdateTextLayerMatches
       );
     }
     this._updateMatches();
@@ -92,11 +88,13 @@ class TextHighlighter {
       return;
     }
     this.enabled = false;
-
-    this.#eventAbortController?.abort();
-    this.#eventAbortController = null;
-
-    this._updateMatches(/* reset = */ true);
+    if (this._onUpdateTextLayerMatches) {
+      this.eventBus._off(
+        "updatetextlayermatches",
+        this._onUpdateTextLayerMatches
+      );
+      this._onUpdateTextLayerMatches = null;
+    }
   }
 
   _convertMatches(matches, matchesLength) {
@@ -178,8 +176,8 @@ class TextHighlighter {
       let div = textDivs[divIdx];
       if (div.nodeType === Node.TEXT_NODE) {
         const span = document.createElement("span");
-        div.before(span);
-        span.append(div);
+        div.parentNode.insertBefore(span, div);
+        span.appendChild(div);
         textDivs[divIdx] = span;
         div = span;
       }
@@ -191,18 +189,11 @@ class TextHighlighter {
       if (className) {
         const span = document.createElement("span");
         span.className = `${className} appended`;
-        span.append(node);
-        div.append(span);
-
-        if (className.includes("selected")) {
-          const { left } = span.getClientRects()[0];
-          const parentLeft = div.getBoundingClientRect().left;
-          return left - parentLeft;
-        }
-        return 0;
+        span.appendChild(node);
+        div.appendChild(span);
+        return className.includes("selected") ? span.offsetLeft : 0;
       }
-
-      div.append(node);
+      div.appendChild(node);
       return 0;
     }
 
@@ -216,20 +207,9 @@ class TextHighlighter {
       return;
     }
 
-    let lastDivIdx = -1;
-    let lastOffset = -1;
     for (let i = i0; i < i1; i++) {
       const match = matches[i];
       const begin = match.begin;
-      if (begin.divIdx === lastDivIdx && begin.offset === lastOffset) {
-        // It's possible to be in this situation if we searched for a 'f' and we
-        // have a ligature 'ff' in the text. The 'ff' has to be highlighted two
-        // times.
-        continue;
-      }
-      lastDivIdx = begin.divIdx;
-      lastOffset = begin.offset;
-
       const end = match.end;
       const isSelected = isSelectedPage && i === selectedMatchIdx;
       const highlightSuffix = isSelected ? " selected" : "";
@@ -284,8 +264,8 @@ class TextHighlighter {
     }
   }
 
-  _updateMatches(reset = false) {
-    if (!this.enabled && !reset) {
+  _updateMatches() {
+    if (!this.enabled) {
       return;
     }
     const { findController, matches, pageIdx } = this;
@@ -293,7 +273,8 @@ class TextHighlighter {
     let clearedUntilDivIdx = -1;
 
     // Clear all current matches.
-    for (const match of matches) {
+    for (let i = 0, ii = matches.length; i < ii; i++) {
+      const match = matches[i];
       const begin = Math.max(clearedUntilDivIdx, match.begin.divIdx);
       for (let n = begin, end = match.end.divIdx; n <= end; n++) {
         const div = textDivs[n];
@@ -303,7 +284,7 @@ class TextHighlighter {
       clearedUntilDivIdx = match.end.divIdx + 1;
     }
 
-    if (!findController?.highlightMatches || reset) {
+    if (!findController?.highlightMatches) {
       return;
     }
     // Convert the matches on the `findController` into the match format

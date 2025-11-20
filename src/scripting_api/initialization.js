@@ -34,7 +34,6 @@ import { Color } from "./color.js";
 import { Console } from "./console.js";
 import { Doc } from "./doc.js";
 import { ProxyHandler } from "./proxy.js";
-import { serializeError } from "./app_utils.js";
 import { Util } from "./util.js";
 
 function initSandbox(params) {
@@ -95,24 +94,28 @@ function initSandbox(params) {
       obj.doc = _document;
       obj.fieldPath = name;
       obj.appObjects = appObjects;
-      obj.util = util;
-
-      const otherFields = annotations.slice(1);
 
       let field;
       switch (obj.type) {
         case "radiobutton": {
-          field = new RadioButtonField(otherFields, obj);
+          const otherButtons = annotations.slice(1);
+          field = new RadioButtonField(otherButtons, obj);
           break;
         }
         case "checkbox": {
-          field = new CheckboxField(otherFields, obj);
+          const otherButtons = annotations.slice(1);
+          field = new CheckboxField(otherButtons, obj);
           break;
         }
-        default:
-          if (otherFields.length > 0) {
-            obj.siblings = otherFields.map(x => x.id);
+        case "text":
+          if (annotations.length <= 1) {
+            field = new Field(obj);
+            break;
           }
+          obj.siblings = annotations.map(x => x.id).slice(1);
+          field = new Field(obj);
+          break;
+        default:
           field = new Field(obj);
       }
 
@@ -211,7 +214,8 @@ function initSandbox(params) {
     try {
       functions[name](args);
     } catch (error) {
-      send(serializeError(error));
+      const value = `${error.toString()}\n${error.stack}`;
+      send({ command: "error", value });
     }
   };
 }

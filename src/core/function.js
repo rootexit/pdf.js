@@ -18,13 +18,11 @@ import {
   FeatureTest,
   FormatError,
   info,
-  MathClamp,
   shadow,
   unreachable,
 } from "../shared/util.js";
 import { PostScriptLexer, PostScriptParser } from "./ps_parser.js";
 import { BaseStream } from "./base_stream.js";
-import { isNumberArray } from "./core_utils.js";
 import { LocalFunctionCache } from "./image_utils.js";
 
 class PDFFunctionFactory {
@@ -33,41 +31,78 @@ class PDFFunctionFactory {
     this.isEvalSupported = isEvalSupported !== false;
   }
 
-  create(fn, parseArray = false) {
-    let fnRef, parsedFn;
-
-    // Check if the Function is cached first, to avoid re-parsing it.
-    if (fn instanceof Ref) {
-      fnRef = fn;
-    } else if (fn instanceof Dict) {
-      fnRef = fn.objId;
-    } else if (fn instanceof BaseStream) {
-      fnRef = fn.dict?.objId;
+  create(fn) {
+    const cachedFunction = this.getCached(fn);
+    if (cachedFunction) {
+      return cachedFunction;
     }
-    if (fnRef) {
-      const cachedFn = this._localFunctionCache.getByRef(fnRef);
-      if (cachedFn) {
-        return cachedFn;
-      }
-    }
-
-    const fnObj = this.xref.fetchIfRef(fn);
-    if (Array.isArray(fnObj)) {
-      if (!parseArray) {
-        throw new Error(
-          'PDFFunctionFactory.create - expected "parseArray" argument.'
-        );
-      }
-      parsedFn = PDFFunction.parseArray(this, fnObj);
-    } else {
-      parsedFn = PDFFunction.parse(this, fnObj);
-    }
+    const parsedFunction = PDFFunction.parse({
+      xref: this.xref,
+      isEvalSupported: this.isEvalSupported,
+      fn: fn instanceof Ref ? this.xref.fetch(fn) : fn,
+    });
 
     // Attempt to cache the parsed Function, by reference.
-    if (fnRef) {
-      this._localFunctionCache.set(/* name = */ null, fnRef, parsedFn);
+    this._cache(fn, parsedFunction);
+
+    return parsedFunction;
+  }
+
+  createFromArray(fnObj) {
+    const cachedFunction = this.getCached(fnObj);
+    if (cachedFunction) {
+      return cachedFunction;
     }
-    return parsedFn;
+    const parsedFunction = PDFFunction.parseArray({
+      xref: this.xref,
+      isEvalSupported: this.isEvalSupported,
+      fnObj: fnObj instanceof Ref ? this.xref.fetch(fnObj) : fnObj,
+    });
+
+    // Attempt to cache the parsed Function, by reference.
+    this._cache(fnObj, parsedFunction);
+
+    return parsedFunction;
+  }
+
+  getCached(cacheKey) {
+    let fnRef;
+    if (cacheKey instanceof Ref) {
+      fnRef = cacheKey;
+    } else if (cacheKey instanceof Dict) {
+      fnRef = cacheKey.objId;
+    } else if (cacheKey instanceof BaseStream) {
+      fnRef = cacheKey.dict && cacheKey.dict.objId;
+    }
+    if (fnRef) {
+      const localFunction = this._localFunctionCache.getByRef(fnRef);
+      if (localFunction) {
+        return localFunction;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * @private
+   */
+  _cache(cacheKey, parsedFunction) {
+    if (!parsedFunction) {
+      throw new Error(
+        'PDFFunctionFactory._cache - expected "parsedFunction" argument.'
+      );
+    }
+    let fnRef;
+    if (cacheKey instanceof Ref) {
+      fnRef = cacheKey;
+    } else if (cacheKey instanceof Dict) {
+      fnRef = cacheKey.objId;
+    } else if (cacheKey instanceof BaseStream) {
+      fnRef = cacheKey.dict && cacheKey.dict.objId;
+    }
+    if (fnRef) {
+      this._localFunctionCache.set(/* name = */ null, fnRef, parsedFunction);
+    }
   }
 
   /**
@@ -82,9 +117,16 @@ function toNumberArray(arr) {
   if (!Array.isArray(arr)) {
     return null;
   }
-  if (!isNumberArray(arr, null)) {
-    // Non-number is found -- convert all items to numbers.
-    return arr.map(x => +x);
+  const length = arr.length;
+  for (let i = 0; i < length; i++) {
+    if (typeof arr[i] !== "number") {
+      // Non-number is found -- convert all items to numbers.
+      const result = new Array(length);
+      for (let j = 0; j < length; j++) {
+        result[j] = +arr[j];
+      }
+      return result;
+    }
   }
   return arr;
 }
@@ -119,31 +161,36 @@ class PDFFunction {
     return array;
   }
 
-  static parse(factory, fn) {
+  static parse({ xref, isEvalSupported, fn }) {
     const dict = fn.dict || fn;
     const typeNum = dict.get("FunctionType");
 
     switch (typeNum) {
       case 0:
-        return this.constructSampled(factory, fn, dict);
+        return this.constructSampled({ xref, isEvalSupported, fn, dict });
       case 1:
         break;
       case 2:
-        return this.constructInterpolated(factory, dict);
+        return this.constructInterpolated({ xref, isEvalSupported, dict });
       case 3:
-        return this.constructStiched(factory, dict);
+        return this.constructStiched({ xref, isEvalSupported, dict });
       case 4:
-        return this.constructPostScript(factory, fn, dict);
+        return this.constructPostScript({ xref, isEvalSupported, fn, dict });
     }
     throw new FormatError("Unknown type of function");
   }
 
-  static parseArray(factory, fnObj) {
-    const { xref } = factory;
+  static parseArray({ xref, isEvalSupported, fnObj }) {
+    if (!Array.isArray(fnObj)) {
+      // not an array -- parsing as regular function
+      return this.parse({ xref, isEvalSupported, fn: fnObj });
+    }
 
     const fnArray = [];
-    for (const fn of fnObj) {
-      fnArray.push(this.parse(factory, xref.fetchIfRef(fn)));
+    for (let j = 0, jj = fnObj.length; j < jj; j++) {
+      fnArray.push(
+        this.parse({ xref, isEvalSupported, fn: xref.fetchIfRef(fnObj[j]) })
+      );
     }
     return function (src, srcOffset, dest, destOffset) {
       for (let i = 0, ii = fnArray.length; i < ii; i++) {
@@ -152,7 +199,7 @@ class PDFFunction {
     };
   }
 
-  static constructSampled(factory, fn, dict) {
+  static constructSampled({ xref, isEvalSupported, fn, dict }) {
     function toMultiArray(arr) {
       const inputLength = arr.length;
       const out = [];
@@ -200,7 +247,11 @@ class PDFFunction {
     }
 
     let decode = toNumberArray(dict.getArray("Decode"));
-    decode = !decode ? range : toMultiArray(decode);
+    if (!decode) {
+      decode = range;
+    } else {
+      decode = toMultiArray(decode);
+    }
 
     const samples = this.getSampleArray(size, outputSize, bps, fn);
     // const mask = 2 ** bps - 1;
@@ -211,9 +262,12 @@ class PDFFunction {
       // Building the cube vertices: its part and sample index
       // http://rjwagner49.com/Mathematics/Interpolation.pdf
       const cubeVertices = 1 << inputSize;
-      const cubeN = new Float64Array(cubeVertices).fill(1);
+      const cubeN = new Float64Array(cubeVertices);
       const cubeVertex = new Uint32Array(cubeVertices);
       let i, j;
+      for (j = 0; j < cubeVertices; j++) {
+        cubeN[j] = 1;
+      }
 
       let k = outputSize,
         pos = 1;
@@ -222,7 +276,10 @@ class PDFFunction {
         // x_i' = min(max(x_i, Domain_2i), Domain_2i+1)
         const domain_2i = domain[i][0];
         const domain_2i_1 = domain[i][1];
-        const xi = MathClamp(src[srcOffset + i], domain_2i, domain_2i_1);
+        const xi = Math.min(
+          Math.max(src[srcOffset + i], domain_2i),
+          domain_2i_1
+        );
 
         // e_i = Interpolate(x_i', Domain_2i, Domain_2i+1,
         //                   Encode_2i, Encode_2i+1)
@@ -236,7 +293,7 @@ class PDFFunction {
 
         // e_i' = min(max(e_i, 0), Size_i - 1)
         const size_i = size[i];
-        e = MathClamp(e, 0, size_i - 1);
+        e = Math.min(Math.max(e, 0), size_i - 1);
 
         // Adjusting the cube: N and vertex sample index
         const e0 = e < size_i - 1 ? Math.floor(e) : e - 1; // e1 = e0 + 1;
@@ -270,12 +327,12 @@ class PDFFunction {
         rj = interpolate(rj, 0, 1, decode[j][0], decode[j][1]);
 
         // y_j = min(max(r_j, range_2j), range_2j+1)
-        dest[destOffset + j] = MathClamp(rj, range[j][0], range[j][1]);
+        dest[destOffset + j] = Math.min(Math.max(rj, range[j][0]), range[j][1]);
       }
     };
   }
 
-  static constructInterpolated(factory, dict) {
+  static constructInterpolated({ xref, isEvalSupported, dict }) {
     const c0 = toNumberArray(dict.getArray("C0")) || [0];
     const c1 = toNumberArray(dict.getArray("C1")) || [1];
     const n = dict.get("N");
@@ -295,7 +352,7 @@ class PDFFunction {
     };
   }
 
-  static constructStiched(factory, dict) {
+  static constructStiched({ xref, isEvalSupported, dict }) {
     const domain = toNumberArray(dict.getArray("Domain"));
 
     if (!domain) {
@@ -306,11 +363,13 @@ class PDFFunction {
     if (inputSize !== 1) {
       throw new FormatError("Bad domain for stiched function");
     }
-    const { xref } = factory;
 
+    const fnRefs = dict.get("Functions");
     const fns = [];
-    for (const fn of dict.get("Functions")) {
-      fns.push(this.parse(factory, xref.fetchIfRef(fn)));
+    for (let i = 0, ii = fnRefs.length; i < ii; ++i) {
+      fns.push(
+        this.parse({ xref, isEvalSupported, fn: xref.fetchIfRef(fnRefs[i]) })
+      );
     }
 
     const bounds = toNumberArray(dict.getArray("Bounds"));
@@ -318,8 +377,17 @@ class PDFFunction {
     const tmpBuf = new Float32Array(1);
 
     return function constructStichedFn(src, srcOffset, dest, destOffset) {
-      // Clamp to domain.
-      const v = MathClamp(src[srcOffset], domain[0], domain[1]);
+      const clip = function constructStichedFromIRClip(v, min, max) {
+        if (v > max) {
+          v = max;
+        } else if (v < min) {
+          v = min;
+        }
+        return v;
+      };
+
+      // clip to domain
+      const v = clip(src[srcOffset], domain[0], domain[1]);
       // calculate which bound the value is in
       const length = bounds.length;
       let i;
@@ -354,7 +422,7 @@ class PDFFunction {
     };
   }
 
-  static constructPostScript(factory, fn, dict) {
+  static constructPostScript({ xref, isEvalSupported, fn, dict }) {
     const domain = toNumberArray(dict.getArray("Domain"));
     const range = toNumberArray(dict.getArray("Range"));
 
@@ -370,7 +438,7 @@ class PDFFunction {
     const parser = new PostScriptParser(lexer);
     const code = parser.parse();
 
-    if (factory.isEvalSupported && FeatureTest.isEvalSupported) {
+    if (isEvalSupported && FeatureTest.isEvalSupported) {
       const compiled = new PostScriptCompiler().compile(code, domain, range);
       if (compiled) {
         // Compiled function consists of simple expressions such as addition,
@@ -437,7 +505,9 @@ class PDFFunction {
 
 function isPDFFunction(v) {
   let fnDict;
-  if (v instanceof Dict) {
+  if (typeof v !== "object") {
+    return false;
+  } else if (v instanceof Dict) {
     fnDict = v;
   } else if (v instanceof BaseStream) {
     fnDict = v.dict;
@@ -448,10 +518,14 @@ function isPDFFunction(v) {
 }
 
 class PostScriptStack {
-  static MAX_STACK_SIZE = 100;
+  static get MAX_STACK_SIZE() {
+    return shadow(this, "MAX_STACK_SIZE", 100);
+  }
 
   constructor(initialStack) {
-    this.stack = initialStack ? Array.from(initialStack) : [];
+    this.stack = !initialStack
+      ? []
+      : Array.prototype.slice.call(initialStack, 0);
   }
 
   push(value) {
@@ -559,13 +633,8 @@ class PostScriptEvaluator {
           }
           break;
         case "atan":
-          b = stack.pop();
           a = stack.pop();
-          a = (Math.atan2(a, b) / Math.PI) * 180;
-          if (a < 0) {
-            a += 360;
-          }
-          stack.push(a);
+          stack.push(Math.atan(a));
           break;
         case "bitshift":
           b = stack.pop();
@@ -586,7 +655,7 @@ class PostScriptEvaluator {
           break;
         case "cos":
           a = stack.pop();
-          stack.push(Math.cos(((a % 360) / 180) * Math.PI));
+          stack.push(Math.cos(a));
           break;
         case "cvi":
           a = stack.pop() | 0;
@@ -653,7 +722,7 @@ class PostScriptEvaluator {
           break;
         case "log":
           a = stack.pop();
-          stack.push(Math.log10(a));
+          stack.push(Math.log(a) / Math.LN10);
           break;
         case "lt":
           b = stack.pop();
@@ -710,7 +779,7 @@ class PostScriptEvaluator {
           break;
         case "sin":
           a = stack.pop();
-          stack.push(Math.sin(((a % 360) / 180) * Math.PI));
+          stack.push(Math.sin(a));
           break;
         case "sqrt":
           a = stack.pop();
@@ -746,431 +815,439 @@ class PostScriptEvaluator {
   }
 }
 
-class AstNode {
-  constructor(type) {
-    this.type = type;
-  }
-
-  visit(visitor) {
-    unreachable("abstract method");
-  }
-}
-
-class AstArgument extends AstNode {
-  constructor(index, min, max) {
-    super("args");
-    this.index = index;
-    this.min = min;
-    this.max = max;
-  }
-
-  visit(visitor) {
-    visitor.visitArgument(this);
-  }
-}
-
-class AstLiteral extends AstNode {
-  constructor(number) {
-    super("literal");
-    this.number = number;
-    this.min = number;
-    this.max = number;
-  }
-
-  visit(visitor) {
-    visitor.visitLiteral(this);
-  }
-}
-
-class AstBinaryOperation extends AstNode {
-  constructor(op, arg1, arg2, min, max) {
-    super("binary");
-    this.op = op;
-    this.arg1 = arg1;
-    this.arg2 = arg2;
-    this.min = min;
-    this.max = max;
-  }
-
-  visit(visitor) {
-    visitor.visitBinaryOperation(this);
-  }
-}
-
-class AstMin extends AstNode {
-  constructor(arg, max) {
-    super("max");
-    this.arg = arg;
-    this.min = arg.min;
-    this.max = max;
-  }
-
-  visit(visitor) {
-    visitor.visitMin(this);
-  }
-}
-
-class AstVariable extends AstNode {
-  constructor(index, min, max) {
-    super("var");
-    this.index = index;
-    this.min = min;
-    this.max = max;
-  }
-
-  visit(visitor) {
-    visitor.visitVariable(this);
-  }
-}
-
-class AstVariableDefinition extends AstNode {
-  constructor(variable, arg) {
-    super("definition");
-    this.variable = variable;
-    this.arg = arg;
-  }
-
-  visit(visitor) {
-    visitor.visitVariableDefinition(this);
-  }
-}
-
-class ExpressionBuilderVisitor {
-  constructor() {
-    this.parts = [];
-  }
-
-  visitArgument(arg) {
-    this.parts.push(
-      "Math.max(",
-      arg.min,
-      ", Math.min(",
-      arg.max,
-      ", src[srcOffset + ",
-      arg.index,
-      "]))"
-    );
-  }
-
-  visitVariable(variable) {
-    this.parts.push("v", variable.index);
-  }
-
-  visitLiteral(literal) {
-    this.parts.push(literal.number);
-  }
-
-  visitBinaryOperation(operation) {
-    this.parts.push("(");
-    operation.arg1.visit(this);
-    this.parts.push(" ", operation.op, " ");
-    operation.arg2.visit(this);
-    this.parts.push(")");
-  }
-
-  visitVariableDefinition(definition) {
-    this.parts.push("var ");
-    definition.variable.visit(this);
-    this.parts.push(" = ");
-    definition.arg.visit(this);
-    this.parts.push(";");
-  }
-
-  visitMin(max) {
-    this.parts.push("Math.min(");
-    max.arg.visit(this);
-    this.parts.push(", ", max.max, ")");
-  }
-
-  toString() {
-    return this.parts.join("");
-  }
-}
-
-function buildAddOperation(num1, num2) {
-  if (num2.type === "literal" && num2.number === 0) {
-    // optimization: second operand is 0
-    return num1;
-  }
-  if (num1.type === "literal" && num1.number === 0) {
-    // optimization: first operand is 0
-    return num2;
-  }
-  if (num2.type === "literal" && num1.type === "literal") {
-    // optimization: operands operand are literals
-    return new AstLiteral(num1.number + num2.number);
-  }
-  return new AstBinaryOperation(
-    "+",
-    num1,
-    num2,
-    num1.min + num2.min,
-    num1.max + num2.max
-  );
-}
-
-function buildMulOperation(num1, num2) {
-  if (num2.type === "literal") {
-    // optimization: second operands is a literal...
-    if (num2.number === 0) {
-      return new AstLiteral(0); // and it's 0
-    } else if (num2.number === 1) {
-      return num1; // and it's 1
-    } else if (num1.type === "literal") {
-      // ... and first operands is a literal too
-      return new AstLiteral(num1.number * num2.number);
-    }
-  }
-  if (num1.type === "literal") {
-    // optimization: first operands is a literal...
-    if (num1.number === 0) {
-      return new AstLiteral(0); // and it's 0
-    } else if (num1.number === 1) {
-      return num2; // and it's 1
-    }
-  }
-  const min = Math.min(
-    num1.min * num2.min,
-    num1.min * num2.max,
-    num1.max * num2.min,
-    num1.max * num2.max
-  );
-  const max = Math.max(
-    num1.min * num2.min,
-    num1.min * num2.max,
-    num1.max * num2.min,
-    num1.max * num2.max
-  );
-  return new AstBinaryOperation("*", num1, num2, min, max);
-}
-
-function buildSubOperation(num1, num2) {
-  if (num2.type === "literal") {
-    // optimization: second operands is a literal...
-    if (num2.number === 0) {
-      return num1; // ... and it's 0
-    } else if (num1.type === "literal") {
-      // ... and first operands is a literal too
-      return new AstLiteral(num1.number - num2.number);
-    }
-  }
-  if (
-    num2.type === "binary" &&
-    num2.op === "-" &&
-    num1.type === "literal" &&
-    num1.number === 1 &&
-    num2.arg1.type === "literal" &&
-    num2.arg1.number === 1
-  ) {
-    // optimization for case: 1 - (1 - x)
-    return num2.arg2;
-  }
-  return new AstBinaryOperation(
-    "-",
-    num1,
-    num2,
-    num1.min - num2.max,
-    num1.max - num2.min
-  );
-}
-
-function buildMinOperation(num1, max) {
-  if (num1.min >= max) {
-    // optimization: num1 min value is not less than required max
-    return new AstLiteral(max); // just returning max
-  } else if (num1.max <= max) {
-    // optimization: num1 max value is not greater than required max
-    return num1; // just returning an argument
-  }
-  return new AstMin(num1, max);
-}
-
 // Most of the PDFs functions consist of simple operations such as:
 //   roll, exch, sub, cvr, pop, index, dup, mul, if, gt, add.
 //
 // We can compile most of such programs, and at the same moment, we can
 // optimize some expressions using basic math properties. Keeping track of
 // min/max values will allow us to avoid extra Math.min/Math.max calls.
-class PostScriptCompiler {
-  compile(code, domain, range) {
-    const stack = [];
-    const instructions = [];
-    const inputSize = domain.length >> 1,
-      outputSize = range.length >> 1;
-    let lastRegister = 0;
-    let n, j;
-    let num1, num2, ast1, ast2, tmpVar, item;
-    for (let i = 0; i < inputSize; i++) {
-      stack.push(new AstArgument(i, domain[i * 2], domain[i * 2 + 1]));
+const PostScriptCompiler = (function PostScriptCompilerClosure() {
+  class AstNode {
+    constructor(type) {
+      this.type = type;
     }
 
-    for (let i = 0, ii = code.length; i < ii; i++) {
-      item = code[i];
-      if (typeof item === "number") {
-        stack.push(new AstLiteral(item));
-        continue;
-      }
-
-      switch (item) {
-        case "add":
-          if (stack.length < 2) {
-            return null;
-          }
-          num2 = stack.pop();
-          num1 = stack.pop();
-          stack.push(buildAddOperation(num1, num2));
-          break;
-        case "cvr":
-          if (stack.length < 1) {
-            return null;
-          }
-          break;
-        case "mul":
-          if (stack.length < 2) {
-            return null;
-          }
-          num2 = stack.pop();
-          num1 = stack.pop();
-          stack.push(buildMulOperation(num1, num2));
-          break;
-        case "sub":
-          if (stack.length < 2) {
-            return null;
-          }
-          num2 = stack.pop();
-          num1 = stack.pop();
-          stack.push(buildSubOperation(num1, num2));
-          break;
-        case "exch":
-          if (stack.length < 2) {
-            return null;
-          }
-          ast1 = stack.pop();
-          ast2 = stack.pop();
-          stack.push(ast1, ast2);
-          break;
-        case "pop":
-          if (stack.length < 1) {
-            return null;
-          }
-          stack.pop();
-          break;
-        case "index":
-          if (stack.length < 1) {
-            return null;
-          }
-          num1 = stack.pop();
-          if (num1.type !== "literal") {
-            return null;
-          }
-          n = num1.number;
-          if (n < 0 || !Number.isInteger(n) || stack.length < n) {
-            return null;
-          }
-          ast1 = stack[stack.length - n - 1];
-          if (ast1.type === "literal" || ast1.type === "var") {
-            stack.push(ast1);
-            break;
-          }
-          tmpVar = new AstVariable(lastRegister++, ast1.min, ast1.max);
-          stack[stack.length - n - 1] = tmpVar;
-          stack.push(tmpVar);
-          instructions.push(new AstVariableDefinition(tmpVar, ast1));
-          break;
-        case "dup":
-          if (stack.length < 1) {
-            return null;
-          }
-          if (
-            typeof code[i + 1] === "number" &&
-            code[i + 2] === "gt" &&
-            code[i + 3] === i + 7 &&
-            code[i + 4] === "jz" &&
-            code[i + 5] === "pop" &&
-            code[i + 6] === code[i + 1]
-          ) {
-            // special case of the commands sequence for the min operation
-            num1 = stack.pop();
-            stack.push(buildMinOperation(num1, code[i + 1]));
-            i += 6;
-            break;
-          }
-          ast1 = stack.at(-1);
-          if (ast1.type === "literal" || ast1.type === "var") {
-            // we don't have to save into intermediate variable a literal or
-            // variable.
-            stack.push(ast1);
-            break;
-          }
-          tmpVar = new AstVariable(lastRegister++, ast1.min, ast1.max);
-          stack[stack.length - 1] = tmpVar;
-          stack.push(tmpVar);
-          instructions.push(new AstVariableDefinition(tmpVar, ast1));
-          break;
-        case "roll":
-          if (stack.length < 2) {
-            return null;
-          }
-          num2 = stack.pop();
-          num1 = stack.pop();
-          if (num2.type !== "literal" || num1.type !== "literal") {
-            // both roll operands must be numbers
-            return null;
-          }
-          j = num2.number;
-          n = num1.number;
-          if (
-            n <= 0 ||
-            !Number.isInteger(n) ||
-            !Number.isInteger(j) ||
-            stack.length < n
-          ) {
-            // ... and integers
-            return null;
-          }
-          j = ((j % n) + n) % n;
-          if (j === 0) {
-            break; // just skipping -- there are nothing to rotate
-          }
-          stack.push(...stack.splice(stack.length - n, n - j));
-          break;
-        default:
-          return null; // unsupported operator
-      }
+    visit(visitor) {
+      unreachable("abstract method");
     }
-
-    if (stack.length !== outputSize) {
-      return null;
-    }
-
-    const result = [];
-    for (const instruction of instructions) {
-      const statementBuilder = new ExpressionBuilderVisitor();
-      instruction.visit(statementBuilder);
-      result.push(statementBuilder.toString());
-    }
-    for (let i = 0, ii = stack.length; i < ii; i++) {
-      const expr = stack[i],
-        statementBuilder = new ExpressionBuilderVisitor();
-      expr.visit(statementBuilder);
-      const min = range[i * 2],
-        max = range[i * 2 + 1];
-      const out = [statementBuilder.toString()];
-      if (min > expr.min) {
-        out.unshift("Math.max(", min, ", ");
-        out.push(")");
-      }
-      if (max < expr.max) {
-        out.unshift("Math.min(", max, ", ");
-        out.push(")");
-      }
-      out.unshift("dest[destOffset + ", i, "] = ");
-      out.push(";");
-      result.push(out.join(""));
-    }
-    return result.join("\n");
   }
-}
+
+  class AstArgument extends AstNode {
+    constructor(index, min, max) {
+      super("args");
+      this.index = index;
+      this.min = min;
+      this.max = max;
+    }
+
+    visit(visitor) {
+      visitor.visitArgument(this);
+    }
+  }
+
+  class AstLiteral extends AstNode {
+    constructor(number) {
+      super("literal");
+      this.number = number;
+      this.min = number;
+      this.max = number;
+    }
+
+    visit(visitor) {
+      visitor.visitLiteral(this);
+    }
+  }
+
+  class AstBinaryOperation extends AstNode {
+    constructor(op, arg1, arg2, min, max) {
+      super("binary");
+      this.op = op;
+      this.arg1 = arg1;
+      this.arg2 = arg2;
+      this.min = min;
+      this.max = max;
+    }
+
+    visit(visitor) {
+      visitor.visitBinaryOperation(this);
+    }
+  }
+
+  class AstMin extends AstNode {
+    constructor(arg, max) {
+      super("max");
+      this.arg = arg;
+      this.min = arg.min;
+      this.max = max;
+    }
+
+    visit(visitor) {
+      visitor.visitMin(this);
+    }
+  }
+
+  class AstVariable extends AstNode {
+    constructor(index, min, max) {
+      super("var");
+      this.index = index;
+      this.min = min;
+      this.max = max;
+    }
+
+    visit(visitor) {
+      visitor.visitVariable(this);
+    }
+  }
+
+  class AstVariableDefinition extends AstNode {
+    constructor(variable, arg) {
+      super("definition");
+      this.variable = variable;
+      this.arg = arg;
+    }
+
+    visit(visitor) {
+      visitor.visitVariableDefinition(this);
+    }
+  }
+
+  class ExpressionBuilderVisitor {
+    constructor() {
+      this.parts = [];
+    }
+
+    visitArgument(arg) {
+      this.parts.push(
+        "Math.max(",
+        arg.min,
+        ", Math.min(",
+        arg.max,
+        ", src[srcOffset + ",
+        arg.index,
+        "]))"
+      );
+    }
+
+    visitVariable(variable) {
+      this.parts.push("v", variable.index);
+    }
+
+    visitLiteral(literal) {
+      this.parts.push(literal.number);
+    }
+
+    visitBinaryOperation(operation) {
+      this.parts.push("(");
+      operation.arg1.visit(this);
+      this.parts.push(" ", operation.op, " ");
+      operation.arg2.visit(this);
+      this.parts.push(")");
+    }
+
+    visitVariableDefinition(definition) {
+      this.parts.push("var ");
+      definition.variable.visit(this);
+      this.parts.push(" = ");
+      definition.arg.visit(this);
+      this.parts.push(";");
+    }
+
+    visitMin(max) {
+      this.parts.push("Math.min(");
+      max.arg.visit(this);
+      this.parts.push(", ", max.max, ")");
+    }
+
+    toString() {
+      return this.parts.join("");
+    }
+  }
+
+  function buildAddOperation(num1, num2) {
+    if (num2.type === "literal" && num2.number === 0) {
+      // optimization: second operand is 0
+      return num1;
+    }
+    if (num1.type === "literal" && num1.number === 0) {
+      // optimization: first operand is 0
+      return num2;
+    }
+    if (num2.type === "literal" && num1.type === "literal") {
+      // optimization: operands operand are literals
+      return new AstLiteral(num1.number + num2.number);
+    }
+    return new AstBinaryOperation(
+      "+",
+      num1,
+      num2,
+      num1.min + num2.min,
+      num1.max + num2.max
+    );
+  }
+
+  function buildMulOperation(num1, num2) {
+    if (num2.type === "literal") {
+      // optimization: second operands is a literal...
+      if (num2.number === 0) {
+        return new AstLiteral(0); // and it's 0
+      } else if (num2.number === 1) {
+        return num1; // and it's 1
+      } else if (num1.type === "literal") {
+        // ... and first operands is a literal too
+        return new AstLiteral(num1.number * num2.number);
+      }
+    }
+    if (num1.type === "literal") {
+      // optimization: first operands is a literal...
+      if (num1.number === 0) {
+        return new AstLiteral(0); // and it's 0
+      } else if (num1.number === 1) {
+        return num2; // and it's 1
+      }
+    }
+    const min = Math.min(
+      num1.min * num2.min,
+      num1.min * num2.max,
+      num1.max * num2.min,
+      num1.max * num2.max
+    );
+    const max = Math.max(
+      num1.min * num2.min,
+      num1.min * num2.max,
+      num1.max * num2.min,
+      num1.max * num2.max
+    );
+    return new AstBinaryOperation("*", num1, num2, min, max);
+  }
+
+  function buildSubOperation(num1, num2) {
+    if (num2.type === "literal") {
+      // optimization: second operands is a literal...
+      if (num2.number === 0) {
+        return num1; // ... and it's 0
+      } else if (num1.type === "literal") {
+        // ... and first operands is a literal too
+        return new AstLiteral(num1.number - num2.number);
+      }
+    }
+    if (
+      num2.type === "binary" &&
+      num2.op === "-" &&
+      num1.type === "literal" &&
+      num1.number === 1 &&
+      num2.arg1.type === "literal" &&
+      num2.arg1.number === 1
+    ) {
+      // optimization for case: 1 - (1 - x)
+      return num2.arg2;
+    }
+    return new AstBinaryOperation(
+      "-",
+      num1,
+      num2,
+      num1.min - num2.max,
+      num1.max - num2.min
+    );
+  }
+
+  function buildMinOperation(num1, max) {
+    if (num1.min >= max) {
+      // optimization: num1 min value is not less than required max
+      return new AstLiteral(max); // just returning max
+    } else if (num1.max <= max) {
+      // optimization: num1 max value is not greater than required max
+      return num1; // just returning an argument
+    }
+    return new AstMin(num1, max);
+  }
+
+  // eslint-disable-next-line no-shadow
+  class PostScriptCompiler {
+    compile(code, domain, range) {
+      const stack = [];
+      const instructions = [];
+      const inputSize = domain.length >> 1,
+        outputSize = range.length >> 1;
+      let lastRegister = 0;
+      let n, j;
+      let num1, num2, ast1, ast2, tmpVar, item;
+      for (let i = 0; i < inputSize; i++) {
+        stack.push(new AstArgument(i, domain[i * 2], domain[i * 2 + 1]));
+      }
+
+      for (let i = 0, ii = code.length; i < ii; i++) {
+        item = code[i];
+        if (typeof item === "number") {
+          stack.push(new AstLiteral(item));
+          continue;
+        }
+
+        switch (item) {
+          case "add":
+            if (stack.length < 2) {
+              return null;
+            }
+            num2 = stack.pop();
+            num1 = stack.pop();
+            stack.push(buildAddOperation(num1, num2));
+            break;
+          case "cvr":
+            if (stack.length < 1) {
+              return null;
+            }
+            break;
+          case "mul":
+            if (stack.length < 2) {
+              return null;
+            }
+            num2 = stack.pop();
+            num1 = stack.pop();
+            stack.push(buildMulOperation(num1, num2));
+            break;
+          case "sub":
+            if (stack.length < 2) {
+              return null;
+            }
+            num2 = stack.pop();
+            num1 = stack.pop();
+            stack.push(buildSubOperation(num1, num2));
+            break;
+          case "exch":
+            if (stack.length < 2) {
+              return null;
+            }
+            ast1 = stack.pop();
+            ast2 = stack.pop();
+            stack.push(ast1, ast2);
+            break;
+          case "pop":
+            if (stack.length < 1) {
+              return null;
+            }
+            stack.pop();
+            break;
+          case "index":
+            if (stack.length < 1) {
+              return null;
+            }
+            num1 = stack.pop();
+            if (num1.type !== "literal") {
+              return null;
+            }
+            n = num1.number;
+            if (n < 0 || !Number.isInteger(n) || stack.length < n) {
+              return null;
+            }
+            ast1 = stack[stack.length - n - 1];
+            if (ast1.type === "literal" || ast1.type === "var") {
+              stack.push(ast1);
+              break;
+            }
+            tmpVar = new AstVariable(lastRegister++, ast1.min, ast1.max);
+            stack[stack.length - n - 1] = tmpVar;
+            stack.push(tmpVar);
+            instructions.push(new AstVariableDefinition(tmpVar, ast1));
+            break;
+          case "dup":
+            if (stack.length < 1) {
+              return null;
+            }
+            if (
+              typeof code[i + 1] === "number" &&
+              code[i + 2] === "gt" &&
+              code[i + 3] === i + 7 &&
+              code[i + 4] === "jz" &&
+              code[i + 5] === "pop" &&
+              code[i + 6] === code[i + 1]
+            ) {
+              // special case of the commands sequence for the min operation
+              num1 = stack.pop();
+              stack.push(buildMinOperation(num1, code[i + 1]));
+              i += 6;
+              break;
+            }
+            ast1 = stack[stack.length - 1];
+            if (ast1.type === "literal" || ast1.type === "var") {
+              // we don't have to save into intermediate variable a literal or
+              // variable.
+              stack.push(ast1);
+              break;
+            }
+            tmpVar = new AstVariable(lastRegister++, ast1.min, ast1.max);
+            stack[stack.length - 1] = tmpVar;
+            stack.push(tmpVar);
+            instructions.push(new AstVariableDefinition(tmpVar, ast1));
+            break;
+          case "roll":
+            if (stack.length < 2) {
+              return null;
+            }
+            num2 = stack.pop();
+            num1 = stack.pop();
+            if (num2.type !== "literal" || num1.type !== "literal") {
+              // both roll operands must be numbers
+              return null;
+            }
+            j = num2.number;
+            n = num1.number;
+            if (
+              n <= 0 ||
+              !Number.isInteger(n) ||
+              !Number.isInteger(j) ||
+              stack.length < n
+            ) {
+              // ... and integers
+              return null;
+            }
+            j = ((j % n) + n) % n;
+            if (j === 0) {
+              break; // just skipping -- there are nothing to rotate
+            }
+            Array.prototype.push.apply(
+              stack,
+              stack.splice(stack.length - n, n - j)
+            );
+            break;
+          default:
+            return null; // unsupported operator
+        }
+      }
+
+      if (stack.length !== outputSize) {
+        return null;
+      }
+
+      const result = [];
+      for (const instruction of instructions) {
+        const statementBuilder = new ExpressionBuilderVisitor();
+        instruction.visit(statementBuilder);
+        result.push(statementBuilder.toString());
+      }
+      for (let i = 0, ii = stack.length; i < ii; i++) {
+        const expr = stack[i],
+          statementBuilder = new ExpressionBuilderVisitor();
+        expr.visit(statementBuilder);
+        const min = range[i * 2],
+          max = range[i * 2 + 1];
+        const out = [statementBuilder.toString()];
+        if (min > expr.min) {
+          out.unshift("Math.max(", min, ", ");
+          out.push(")");
+        }
+        if (max < expr.max) {
+          out.unshift("Math.min(", max, ", ");
+          out.push(")");
+        }
+        out.unshift("dest[destOffset + ", i, "] = ");
+        out.push(";");
+        result.push(out.join(""));
+      }
+      return result.join("\n");
+    }
+  }
+
+  return PostScriptCompiler;
+})();
 
 export {
   isPDFFunction,

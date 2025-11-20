@@ -12,14 +12,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* globals process */
+/* globals __non_webpack_require__ */
 
-import { isNodeJS, warn } from "../shared/util.js";
-import { BaseCanvasFactory } from "./canvas_factory.js";
-import { BaseCMapReaderFactory } from "./cmap_reader_factory.js";
-import { BaseFilterFactory } from "./filter_factory.js";
-import { BaseStandardFontDataFactory } from "./standard_fontdata_factory.js";
-import { BaseWasmFactory } from "./wasm_factory.js";
+import {
+  BaseCanvasFactory,
+  BaseCMapReaderFactory,
+  BaseStandardFontDataFactory,
+} from "./base_factory.js";
 
 if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
   throw new Error(
@@ -27,74 +26,26 @@ if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
   );
 }
 
-if (isNodeJS) {
-  if (typeof PDFJSDev === "undefined" || PDFJSDev.test("SKIP_BABEL")) {
-    warn("Please use the `legacy` build in Node.js environments.");
-  } else {
-    let canvas;
-    try {
-      const require = process
-        .getBuiltinModule("module")
-        .createRequire(import.meta.url);
-
-      try {
-        canvas = require("@napi-rs/canvas");
-      } catch (ex) {
-        warn(`Cannot load "@napi-rs/canvas" package: "${ex}".`);
+const fetchData = function (url) {
+  return new Promise((resolve, reject) => {
+    const fs = __non_webpack_require__("fs");
+    fs.readFile(url, (error, data) => {
+      if (error || !data) {
+        reject(new Error(error));
+        return;
       }
-    } catch (ex) {
-      warn(`Cannot access the \`require\` function: "${ex}".`);
-    }
-
-    if (!globalThis.DOMMatrix) {
-      if (canvas?.DOMMatrix) {
-        globalThis.DOMMatrix = canvas.DOMMatrix;
-      } else {
-        warn("Cannot polyfill `DOMMatrix`, rendering may be broken.");
-      }
-    }
-    if (!globalThis.ImageData) {
-      if (canvas?.ImageData) {
-        globalThis.ImageData = canvas.ImageData;
-      } else {
-        warn("Cannot polyfill `ImageData`, rendering may be broken.");
-      }
-    }
-    if (!globalThis.Path2D) {
-      if (canvas?.Path2D) {
-        globalThis.Path2D = canvas.Path2D;
-      } else {
-        warn("Cannot polyfill `Path2D`, rendering may be broken.");
-      }
-    }
-    if (!globalThis.navigator?.language) {
-      globalThis.navigator = {
-        language: "en-US",
-        platform: "",
-        userAgent: "",
-      };
-    }
-  }
-}
-
-async function fetchData(url) {
-  const fs = process.getBuiltinModule("fs");
-  const data = await fs.promises.readFile(url);
-  return new Uint8Array(data);
-}
-
-class NodeFilterFactory extends BaseFilterFactory {}
+      resolve(new Uint8Array(data));
+    });
+  });
+};
 
 class NodeCanvasFactory extends BaseCanvasFactory {
   /**
    * @ignore
    */
   _createCanvas(width, height) {
-    const require = process
-      .getBuiltinModule("module")
-      .createRequire(import.meta.url);
-    const canvas = require("@napi-rs/canvas");
-    return canvas.createCanvas(width, height);
+    const Canvas = __non_webpack_require__("canvas");
+    return Canvas.createCanvas(width, height);
   }
 }
 
@@ -102,8 +53,10 @@ class NodeCMapReaderFactory extends BaseCMapReaderFactory {
   /**
    * @ignore
    */
-  async _fetch(url) {
-    return fetchData(url);
+  _fetchData(url, compressionType) {
+    return fetchData(url).then(data => {
+      return { cMapData: data, compressionType };
+    });
   }
 }
 
@@ -111,25 +64,13 @@ class NodeStandardFontDataFactory extends BaseStandardFontDataFactory {
   /**
    * @ignore
    */
-  async _fetch(url) {
-    return fetchData(url);
-  }
-}
-
-class NodeWasmFactory extends BaseWasmFactory {
-  /**
-   * @ignore
-   */
-  async _fetch(url) {
+  _fetchData(url) {
     return fetchData(url);
   }
 }
 
 export {
-  fetchData,
   NodeCanvasFactory,
   NodeCMapReaderFactory,
-  NodeFilterFactory,
   NodeStandardFontDataFactory,
-  NodeWasmFactory,
 };

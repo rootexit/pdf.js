@@ -33,9 +33,13 @@ class PredictorStream extends DecodeStream {
       throw new FormatError(`Unsupported predictor: ${predictor}`);
     }
 
-    this.readBlock = predictor === 2 ? this.readBlockTiff : this.readBlockPng;
+    if (predictor === 2) {
+      this.readBlock = this.readBlockTiff;
+    } else {
+      this.readBlock = this.readBlockPng;
+    }
 
-    this.stream = str;
+    this.str = str;
     this.dict = str.dict;
 
     const colors = (this.colors = params.get("Colors") || 1);
@@ -57,7 +61,7 @@ class PredictorStream extends DecodeStream {
     const bits = this.bits;
     const colors = this.colors;
 
-    const rawBytes = this.stream.getBytes(rowBytes);
+    const rawBytes = this.str.getBytes(rowBytes);
     this.eof = !rawBytes.length;
     if (this.eof) {
       return;
@@ -138,8 +142,8 @@ class PredictorStream extends DecodeStream {
     const rowBytes = this.rowBytes;
     const pixBytes = this.pixBytes;
 
-    const predictor = this.stream.getByte();
-    const rawBytes = this.stream.getBytes(rowBytes);
+    const predictor = this.str.getByte();
+    const rawBytes = this.str.getBytes(rowBytes);
     this.eof = !rawBytes.length;
     if (this.eof) {
       return;

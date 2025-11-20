@@ -49,7 +49,7 @@ function getFieldType(actions) {
   if (format.startsWith("AFDate_")) {
     return FieldType.date;
   }
-  if (format.startsWith("AFTime_")) {
+  if (format.startsWith("AFTime__")) {
     return FieldType.time;
   }
   return FieldType.none;

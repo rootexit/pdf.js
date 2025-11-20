@@ -14,8 +14,9 @@
  */
 
 import { $buildXFAObject, NamespaceIds } from "./namespaces.js";
-import { $content, $finalize } from "./symbol_utils.js";
 import {
+  $content,
+  $finalize,
   ContentObject,
   IntegerObject,
   Option01,
@@ -956,7 +957,8 @@ class Range extends ContentObject {
 
   [$finalize]() {
     this[$content] = this[$content]
-      .split(",", 2)
+      .trim()
+      .split(/\s*,\s*/, 2)
       .map(range => range.split("-").map(x => parseInt(x.trim(), 10)))
       .filter(range => range.every(x => !isNaN(x)))
       .map(range => {
@@ -1003,7 +1005,7 @@ class Rename extends ContentObject {
     // is no colon.
     if (
       this[$content].toLowerCase().startsWith("xml") ||
-      new RegExp("[\\p{L}_][\\p{L}\\d._\\p{M}-]*", "u").test(this[$content])
+      this[$content].match(new RegExp("[\\p{L}_][\\p{L}\\d._\\p{M}-]*", "u"))
     ) {
       warn("XFA - Rename: invalid XFA name");
     }
@@ -1307,7 +1309,10 @@ class Window extends ContentObject {
   }
 
   [$finalize]() {
-    const pair = this[$content].split(",", 2).map(x => parseInt(x.trim(), 10));
+    const pair = this[$content]
+      .trim()
+      .split(/\s*,\s*/, 2)
+      .map(x => parseInt(x, 10));
     if (pair.some(x => isNaN(x))) {
       this[$content] = [0, 0];
       return;

@@ -48,7 +48,7 @@ function isWhitespaceString(s) {
 
 class XMLParserBase {
   _resolveEntities(s) {
-    return s.replaceAll(/&([^;]+);/g, (all, entity) => {
+    return s.replace(/&([^;]+);/g, (all, entity) => {
       if (entity.substring(0, 2) === "#x") {
         return String.fromCodePoint(parseInt(entity.substring(2), 16));
       } else if (entity.substring(0, 1) === "#") {
@@ -302,7 +302,7 @@ class SimpleDOMNode {
   }
 
   get firstChild() {
-    return this.childNodes?.[0];
+    return this.childNodes && this.childNodes[0];
   }
 
   get nextSibling() {
@@ -321,7 +321,11 @@ class SimpleDOMNode {
     if (!this.childNodes) {
       return this.nodeValue || "";
     }
-    return this.childNodes.map(child => child.textContent).join("");
+    return this.childNodes
+      .map(function (child) {
+        return child.textContent;
+      })
+      .join("");
   }
 
   get children() {
@@ -329,7 +333,7 @@ class SimpleDOMNode {
   }
 
   hasChildNodes() {
-    return this.childNodes?.length > 0;
+    return this.childNodes && this.childNodes.length > 0;
   }
 
   /**
@@ -350,11 +354,6 @@ class SimpleDOMNode {
     }
 
     const component = paths[pos];
-    if (component.name.startsWith("#") && pos < paths.length - 1) {
-      // If it starts with a # then it's a class which is not a concept for
-      // datasets elements (https://www.pdfa.org/norm-refs/XFA-3_3.pdf#page=96).
-      return this.searchNode(paths, pos + 1);
-    }
     const stack = [];
     let node = this;
 
@@ -384,7 +383,7 @@ class SimpleDOMNode {
         }
       }
 
-      if (node.childNodes?.length > 0) {
+      if (node.childNodes && node.childNodes.length !== 0) {
         stack.push([node, 0]);
         node = node.childNodes[0];
       } else if (stack.length === 0) {
@@ -495,12 +494,12 @@ class SimpleXMLParser extends XMLParserBase {
 
   onEndElement(name) {
     this._currentFragment = this._stack.pop() || [];
-    const lastElement = this._currentFragment.at(-1);
+    const lastElement = this._currentFragment[this._currentFragment.length - 1];
     if (!lastElement) {
       return null;
     }
-    for (const childNode of lastElement.childNodes) {
-      childNode.parentNode = lastElement;
+    for (let i = 0, ii = lastElement.childNodes.length; i < ii; i++) {
+      lastElement.childNodes[i].parentNode = lastElement;
     }
     return lastElement;
   }

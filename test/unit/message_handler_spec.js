@@ -15,15 +15,18 @@
 
 import {
   AbortException,
+  createPromiseCapability,
   UnknownErrorException,
 } from "../../src/shared/util.js";
-import { LoopbackPort } from "../../src/display/api_utils.js";
+import { LoopbackPort } from "../../src/display/api.js";
 import { MessageHandler } from "../../src/shared/message_handler.js";
 
 describe("message_handler", function () {
   // Sleep function to wait for sometime, similar to setTimeout but faster.
   function sleep(ticks) {
-    return Promise.resolve().then(() => ticks && sleep(ticks - 1));
+    return Promise.resolve().then(() => {
+      return ticks && sleep(ticks - 1);
+    });
   }
 
   describe("sendWithStream", function () {
@@ -335,7 +338,7 @@ describe("message_handler", function () {
     it("should ignore any pull after close is called", async function () {
       let log = "";
       const port = new LoopbackPort();
-      const { promise, resolve } = Promise.withResolvers();
+      const capability = createPromiseCapability();
       const messageHandler2 = new MessageHandler("worker", "main", port);
       messageHandler2.on("fakeHandler", (data, sink) => {
         sink.onPull = function () {
@@ -349,7 +352,7 @@ describe("message_handler", function () {
           log += "1";
           sink.enqueue([1, 2, 3, 4], 4);
         });
-        return promise.then(() => {
+        return capability.promise.then(() => {
           sink.close();
         });
       });
@@ -370,8 +373,8 @@ describe("message_handler", function () {
       await sleep(10);
       expect(log).toEqual("01");
 
-      resolve();
-      await promise;
+      capability.resolve();
+      await capability.promise;
 
       let result = await reader.read();
       expect(result.value).toEqual([1, 2, 3, 4]);

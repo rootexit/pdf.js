@@ -14,7 +14,8 @@
  */
 
 import { CMap, CMapFactory, IdentityCMap } from "../../src/core/cmap.js";
-import { CMAP_URL, DefaultCMapReaderFactory } from "./test_utils.js";
+import { CMAP_PARAMS } from "./test_utils.js";
+import { DefaultCMapReaderFactory } from "../../src/display/api.js";
 import { Name } from "../../src/core/primitives.js";
 import { StringStream } from "../../src/core/stream.js";
 
@@ -24,7 +25,8 @@ describe("cmap", function () {
   beforeAll(function () {
     // Allow CMap testing in Node.js, e.g. for Travis.
     const CMapReaderFactory = new DefaultCMapReaderFactory({
-      baseUrl: CMAP_URL,
+      baseUrl: CMAP_PARAMS.cMapUrl,
+      isCompressed: CMAP_PARAMS.cMapPacked,
     });
 
     fetchBuiltInCMap = function (name) {
@@ -221,7 +223,8 @@ describe("cmap", function () {
     } catch (reason) {
       expect(reason instanceof Error).toEqual(true);
       expect(reason.message).toEqual(
-        "Ensure that the `cMapUrl` and `cMapPacked` API parameters are provided."
+        'The CMap "baseUrl" parameter must be specified, ensure that ' +
+          'the "cMapUrl" and "cMapPacked" API parameters are provided.'
       );
     }
   });
@@ -229,7 +232,7 @@ describe("cmap", function () {
   it("attempts to load a built-in CMap with inconsistent API parameters", async function () {
     function tmpFetchBuiltInCMap(name) {
       const CMapReaderFactory = new DefaultCMapReaderFactory({
-        baseUrl: CMAP_URL,
+        baseUrl: CMAP_PARAMS.cMapUrl,
         isCompressed: false,
       });
       return CMapReaderFactory.fetch({ name });

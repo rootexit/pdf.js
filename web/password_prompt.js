@@ -13,8 +13,6 @@
  * limitations under the License.
  */
 
-/** @typedef {import("./overlay_manager.js").OverlayManager} OverlayManager */
-
 import { PasswordResponses } from "pdfjs-lib";
 
 /**
@@ -30,8 +28,6 @@ import { PasswordResponses } from "pdfjs-lib";
  */
 
 class PasswordPrompt {
-  #activeCapability = null;
-
   #updateCallback = null;
 
   #reason = null;
@@ -39,21 +35,23 @@ class PasswordPrompt {
   /**
    * @param {PasswordPromptOptions} options
    * @param {OverlayManager} overlayManager - Manager for the viewer overlays.
+   * @param {IL10n} l10n - Localization service.
    * @param {boolean} [isViewerEmbedded] - If the viewer is embedded, in e.g.
    *   an <iframe> or an <object>. The default value is `false`.
    */
-  constructor(options, overlayManager, isViewerEmbedded = false) {
+  constructor(options, overlayManager, l10n, isViewerEmbedded = false) {
     this.dialog = options.dialog;
     this.label = options.label;
     this.input = options.input;
     this.submitButton = options.submitButton;
     this.cancelButton = options.cancelButton;
     this.overlayManager = overlayManager;
+    this.l10n = l10n;
     this._isViewerEmbedded = isViewerEmbedded;
 
     // Attach the event listeners.
     this.submitButton.addEventListener("click", this.#verify.bind(this));
-    this.cancelButton.addEventListener("click", this.close.bind(this));
+    this.cancelButton.addEventListener("click", this.#cancel.bind(this));
     this.input.addEventListener("keydown", e => {
       if (e.keyCode === /* Enter = */ 13) {
         this.#verify();
@@ -66,15 +64,7 @@ class PasswordPrompt {
   }
 
   async open() {
-    await this.#activeCapability?.promise;
-    this.#activeCapability = Promise.withResolvers();
-
-    try {
-      await this.overlayManager.open(this.dialog);
-    } catch (ex) {
-      this.#activeCapability.resolve();
-      throw ex;
-    }
+    await this.overlayManager.open(this.dialog);
 
     const passwordIncorrect =
       this.#reason === PasswordResponses.INCORRECT_PASSWORD;
@@ -82,14 +72,15 @@ class PasswordPrompt {
     if (!this._isViewerEmbedded || passwordIncorrect) {
       this.input.focus();
     }
-    this.label.setAttribute(
-      "data-l10n-id",
-      passwordIncorrect ? "pdfjs-password-invalid" : "pdfjs-password-label"
+    this.label.textContent = await this.l10n.get(
+      `password_${passwordIncorrect ? "invalid" : "label"}`
     );
   }
 
   async close() {
-    this.overlayManager.closeIfActive(this.dialog);
+    if (this.overlayManager.active === this.dialog) {
+      this.overlayManager.close(this.dialog);
+    }
   }
 
   #verify() {
@@ -101,7 +92,6 @@ class PasswordPrompt {
 
   #cancel() {
     this.#invokeCallback(new Error("PasswordPrompt cancelled."));
-    this.#activeCapability.resolve();
   }
 
   #invokeCallback(password) {
@@ -115,10 +105,7 @@ class PasswordPrompt {
     this.#updateCallback = null;
   }
 
-  async setUpdateCallback(updateCallback, reason) {
-    if (this.#activeCapability) {
-      await this.#activeCapability.promise;
-    }
+  setUpdateCallback(updateCallback, reason) {
     this.#updateCallback = updateCallback;
     this.#reason = reason;
   }

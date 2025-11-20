@@ -13,8 +13,6 @@
  * limitations under the License.
  */
 
-// eslint-disable-next-line max-len
-/** @typedef {import("./annotation_storage").AnnotationStorage} AnnotationStorage */
 /** @typedef {import("./display_utils").PageViewport} PageViewport */
 /** @typedef {import("../../web/interfaces").IPDFLinkService} IPDFLinkService */
 
@@ -81,12 +79,9 @@ class XfaLayer {
         break;
       case "select":
         if (storedData.value !== null) {
-          html.setAttribute("value", storedData.value);
           for (const option of element.children) {
             if (option.attributes.value === storedData.value) {
               option.attributes.selected = true;
-            } else if (option.attributes.hasOwnProperty("selected")) {
-              delete option.attributes.selected;
             }
           }
         }
@@ -112,34 +107,28 @@ class XfaLayer {
       attributes.name = `${attributes.name}-${intent}`;
     }
     for (const [key, value] of Object.entries(attributes)) {
-      if (value === null || value === undefined) {
+      // We don't need to add dataId in the html object but it can
+      // be useful to know its value when writing printing tests:
+      // in this case, don't skip dataId to have its value.
+      if (value === null || value === undefined || key === "dataId") {
         continue;
       }
 
-      switch (key) {
-        case "class":
+      if (key !== "style") {
+        if (key === "textContent") {
+          html.textContent = value;
+        } else if (key === "class") {
           if (value.length) {
             html.setAttribute(key, value.join(" "));
           }
-          break;
-        case "dataId":
-          // We don't need to add dataId in the html object but it can
-          // be useful to know its value when writing printing tests:
-          // in this case, don't skip dataId to have its value.
-          break;
-        case "id":
-          html.setAttribute("data-element-id", value);
-          break;
-        case "style":
-          Object.assign(html.style, value);
-          break;
-        case "textContent":
-          html.textContent = value;
-          break;
-        default:
-          if (!isHTMLAnchorElement || (key !== "href" && key !== "newWindow")) {
-            html.setAttribute(key, value);
+        } else {
+          if (isHTMLAnchorElement && (key === "href" || key === "newWindow")) {
+            continue; // Handled below.
           }
+          html.setAttribute(key, value);
+        }
+      } else {
+        Object.assign(html.style, value);
       }
     }
 
@@ -151,7 +140,8 @@ class XfaLayer {
       );
     }
 
-    // Set the value after the others to be sure to overwrite any other values.
+    // Set the value after the others to be sure overwrite
+    // any other values.
     if (storage && attributes.dataId) {
       this.setupStorage(html, attributes.dataId, element, storage);
     }
@@ -176,10 +166,10 @@ class XfaLayer {
         linkService,
       });
     }
+    const stack = [[root, -1, rootHtml]];
 
-    const isNotForRichText = intent !== "richText";
     const rootDiv = parameters.div;
-    rootDiv.append(rootHtml);
+    rootDiv.appendChild(rootHtml);
 
     if (parameters.viewport) {
       const transform = `matrix(${parameters.viewport.transform.join(",")})`;
@@ -187,36 +177,21 @@ class XfaLayer {
     }
 
     // Set defaults.
-    if (isNotForRichText) {
+    if (intent !== "richText") {
       rootDiv.setAttribute("class", "xfaLayer xfaFont");
     }
 
     // Text nodes used for the text highlighter.
     const textDivs = [];
 
-    // In the rich text context, it's possible to just have a text node without
-    // a root element, so we handle this case here (see issue 17215).
-    if (root.children.length === 0) {
-      if (root.value) {
-        const node = document.createTextNode(root.value);
-        rootHtml.append(node);
-        if (isNotForRichText && XfaText.shouldBuildText(root.name)) {
-          textDivs.push(node);
-        }
-      }
-      return { textDivs };
-    }
-
-    const stack = [[root, -1, rootHtml]];
-
     while (stack.length > 0) {
-      const [parent, i, html] = stack.at(-1);
+      const [parent, i, html] = stack[stack.length - 1];
       if (i + 1 === parent.children.length) {
         stack.pop();
         continue;
       }
 
-      const child = parent.children[++stack.at(-1)[1]];
+      const child = parent.children[++stack[stack.length - 1][1]];
       if (child === null) {
         continue;
       }
@@ -225,15 +200,18 @@ class XfaLayer {
       if (name === "#text") {
         const node = document.createTextNode(child.value);
         textDivs.push(node);
-        html.append(node);
+        html.appendChild(node);
         continue;
       }
 
-      const childHtml = child?.attributes?.xmlns
-        ? document.createElementNS(child.attributes.xmlns, name)
-        : document.createElement(name);
+      let childHtml;
+      if (child?.attributes?.xmlns) {
+        childHtml = document.createElementNS(child.attributes.xmlns, name);
+      } else {
+        childHtml = document.createElement(name);
+      }
 
-      html.append(childHtml);
+      html.appendChild(childHtml);
       if (child.attributes) {
         this.setAttributes({
           html: childHtml,
@@ -244,14 +222,14 @@ class XfaLayer {
         });
       }
 
-      if (child.children?.length > 0) {
+      if (child.children && child.children.length > 0) {
         stack.push([child, -1, childHtml]);
       } else if (child.value) {
         const node = document.createTextNode(child.value);
-        if (isNotForRichText && XfaText.shouldBuildText(name)) {
+        if (XfaText.shouldBuildText(name)) {
           textDivs.push(node);
         }
-        childHtml.append(node);
+        childHtml.appendChild(node);
       }
     }
 

@@ -16,8 +16,7 @@
 // In mozilla-central, this file is loaded as non-module script,
 // so it mustn't have any dependencies.
 
-// eslint-disable-next-line no-restricted-syntax
-export class SandboxSupportBase {
+class SandboxSupportBase {
   /**
    * @param {DOMWindow} - win
    */
@@ -30,10 +29,8 @@ export class SandboxSupportBase {
   }
 
   destroy() {
-    this.commFun = null;
-    for (const id of this.timeoutIds.values()) {
-      this.win.clearTimeout(id);
-    }
+    this.commFunc = null;
+    this.timeoutIds.forEach(([_, id]) => this.win.clearTimeout(id));
     this.timeoutIds = null;
   }
 
@@ -63,9 +60,6 @@ export class SandboxSupportBase {
    * @param {Array<Object>} args - Arguments of the function.
    */
   callSandboxFunction(name, args) {
-    if (!this.commFun) {
-      return;
-    }
     try {
       args = this.exportValueToSandbox(args);
       this.commFun(name, args);
@@ -85,13 +79,6 @@ export class SandboxSupportBase {
         ) {
           return;
         }
-
-        if (callbackId === 0) {
-          // This callbackId corresponds to the one used for userActivation.
-          // So here, we cancel the last userActivation.
-          this.win.clearTimeout(this.timeoutIds.get(callbackId));
-        }
-
         const id = this.win.setTimeout(() => {
           this.timeoutIds.delete(callbackId);
           this.callSandboxFunction("timeoutCb", {
@@ -101,9 +88,9 @@ export class SandboxSupportBase {
         }, nMilliseconds);
         this.timeoutIds.set(callbackId, id);
       },
-      clearTimeout: callbackId => {
-        this.win.clearTimeout(this.timeoutIds.get(callbackId));
-        this.timeoutIds.delete(callbackId);
+      clearTimeout: id => {
+        this.win.clearTimeout(this.timeoutIds.get(id));
+        this.timeoutIds.delete(id);
       },
       setInterval: (callbackId, nMilliseconds) => {
         if (
@@ -120,9 +107,9 @@ export class SandboxSupportBase {
         }, nMilliseconds);
         this.timeoutIds.set(callbackId, id);
       },
-      clearInterval: callbackId => {
-        this.win.clearInterval(this.timeoutIds.get(callbackId));
-        this.timeoutIds.delete(callbackId);
+      clearInterval: id => {
+        this.win.clearInterval(this.timeoutIds.get(id));
+        this.timeoutIds.delete(id);
       },
       alert: cMsg => {
         if (typeof cMsg !== "string") {
@@ -184,4 +171,11 @@ export class SandboxSupportBase {
       }
     };
   }
+}
+
+if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("MOZCENTRAL")) {
+  exports.SandboxSupportBase = SandboxSupportBase;
+} else {
+  /* eslint-disable-next-line no-unused-vars, no-var */
+  var EXPORTED_SYMBOLS = ["SandboxSupportBase"];
 }

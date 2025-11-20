@@ -16,7 +16,6 @@
 import { createActionsMap, FieldType, getFieldType } from "./common.js";
 import { Color } from "./color.js";
 import { PDFObject } from "./pdf_object.js";
-import { serializeError } from "./app_utils.js";
 
 class Field extends PDFObject {
   constructor(data) {
@@ -30,6 +29,7 @@ class Field extends PDFObject {
     this.buttonScaleHow = data.buttonScaleHow;
     this.ButtonScaleWhen = data.buttonScaleWhen;
     this.calcOrderIndex = data.calcOrderIndex;
+    this.charLimit = data.charLimit;
     this.comb = data.comb;
     this.commitOnSelChange = data.commitOnSelChange;
     this.currentValueIndices = data.currentValueIndices;
@@ -57,6 +57,7 @@ class Field extends PDFObject {
     this.required = data.required;
     this.richText = data.richText;
     this.richValue = data.richValue;
+    this.rotation = data.rotation;
     this.style = data.style;
     this.submitName = data.submitName;
     this.textFont = data.textFont;
@@ -69,7 +70,6 @@ class Field extends PDFObject {
     this._browseForFileToSubmit = data.browseForFileToSubmit || null;
     this._buttonCaption = null;
     this._buttonIcon = null;
-    this._charLimit = data.charLimit;
     this._children = null;
     this._currentValueIndices = data.currentValueIndices || 0;
     this._document = data.doc;
@@ -77,24 +77,16 @@ class Field extends PDFObject {
     this._fillColor = data.fillColor || ["T"];
     this._isChoice = Array.isArray(data.items);
     this._items = data.items || [];
-    this._hasValue = data.hasOwnProperty("value");
     this._page = data.page || 0;
     this._strokeColor = data.strokeColor || ["G", 0];
     this._textColor = data.textColor || ["G", 0];
-    this._value = null;
+    this._value = data.value || "";
     this._kidIds = data.kidIds || null;
     this._fieldType = getFieldType(this._actions);
     this._siblings = data.siblings || null;
-    this._rotation = data.rotation || 0;
-    this._datetimeFormat = data.datetimeFormat || null;
-    this._hasDateOrTime = !!data.hasDatetimeHTML;
-    this._util = data.util;
 
     this._globalEval = data.globalEval;
     this._appObjects = data.appObjects;
-
-    // The value is set depending on the field type.
-    this.value = data.value || "";
   }
 
   get currentValueIndices() {
@@ -131,10 +123,12 @@ class Field extends PDFObject {
       indices.forEach(i => {
         this._value.push(this._items[i].displayValue);
       });
-    } else if (indices.length > 0) {
-      indices = indices.splice(1, indices.length - 1);
-      this._currentValueIndices = indices[0];
-      this._value = this._items[this._currentValueIndices];
+    } else {
+      if (indices.length > 0) {
+        indices = indices.splice(1, indices.length - 1);
+        this._currentValueIndices = indices[0];
+        this._value = this._items[this._currentValueIndices];
+      }
     }
     this._send({ id: this._id, indices });
   }
@@ -155,17 +149,6 @@ class Field extends PDFObject {
 
   set bgColor(color) {
     this.fillColor = color;
-  }
-
-  get charLimit() {
-    return this._charLimit;
-  }
-
-  set charLimit(limit) {
-    if (typeof limit !== "number") {
-      throw new Error("Invalid argument value");
-    }
-    this._charLimit = Math.max(0, Math.floor(limit));
   }
 
   get numItems() {
@@ -205,22 +188,6 @@ class Field extends PDFObject {
     throw new Error("field.page is read-only");
   }
 
-  get rotation() {
-    return this._rotation;
-  }
-
-  set rotation(angle) {
-    angle = Math.floor(angle);
-    if (angle % 90 !== 0) {
-      throw new Error("Invalid rotation: must be a multiple of 90");
-    }
-    angle %= 360;
-    if (angle < 0) {
-      angle += 360;
-    }
-    this._rotation = angle;
-  }
-
   get textColor() {
     return this._textColor;
   }
@@ -244,74 +211,40 @@ class Field extends PDFObject {
   }
 
   set value(value) {
-    if (this._isChoice) {
-      this._setChoiceValue(value);
-      return;
-    }
-
-    if (this._hasDateOrTime && value) {
-      const date = this._util.scand(this._datetimeFormat, value);
-      if (date) {
-        this._originalValue = date.valueOf();
-        value = this._util.printd(this._datetimeFormat, date);
-        this._value = !isNaN(value) ? parseFloat(value) : value;
-        return;
+    if (value === "") {
+      this._value = "";
+    } else if (typeof value === "string") {
+      switch (this._fieldType) {
+        case FieldType.number:
+        case FieldType.percent:
+          value = parseFloat(value);
+          if (!isNaN(value)) {
+            this._value = value;
+          }
+          break;
+        default:
+          this._value = value;
       }
-    }
-
-    if (
-      value === "" ||
-      typeof value !== "string" ||
-      // When the field type is date or time, the value must be a string.
-      this._fieldType >= FieldType.date
-    ) {
-      this._originalValue = undefined;
-      this._value = value;
-      return;
-    }
-
-    this._originalValue = value;
-    const _value = value.trim().replace(",", ".");
-    this._value = !isNaN(_value) ? parseFloat(_value) : value;
-  }
-
-  get _initialValue() {
-    return (this._hasDateOrTime && this._originalValue) || null;
-  }
-
-  _getValue() {
-    return this._originalValue ?? this.value;
-  }
-
-  _setChoiceValue(value) {
-    if (this.multipleSelection) {
-      if (!Array.isArray(value)) {
-        value = [value];
-      }
-      const values = new Set(value);
-      if (Array.isArray(this._currentValueIndices)) {
-        this._currentValueIndices.length = 0;
-        this._value.length = 0;
-      } else {
-        this._currentValueIndices = [];
-        this._value = [];
-      }
-      this._items.forEach((item, i) => {
-        if (values.has(item.exportValue)) {
-          this._currentValueIndices.push(i);
-          this._value.push(item.exportValue);
-        }
-      });
     } else {
-      if (Array.isArray(value)) {
-        value = value[0];
-      }
-      const index = this._items.findIndex(
-        ({ exportValue }) => value === exportValue
-      );
-      if (index !== -1) {
-        this._currentValueIndices = index;
-        this._value = this._items[index].exportValue;
+      this._value = value;
+    }
+    if (this._isChoice) {
+      if (this.multipleSelection) {
+        const values = new Set(value);
+        if (Array.isArray(this._currentValueIndices)) {
+          this._currentValueIndices.length = 0;
+        } else {
+          this._currentValueIndices = [];
+        }
+        this._items.forEach(({ displayValue }, i) => {
+          if (values.has(displayValue)) {
+            this._currentValueIndices.push(i);
+          }
+        });
+      } else {
+        this._currentValueIndices = this._items.findIndex(
+          ({ displayValue }) => value === displayValue
+        );
       }
     }
   }
@@ -392,7 +325,7 @@ class Field extends PDFObject {
       nIdx = Array.isArray(this._currentValueIndices)
         ? this._currentValueIndices[0]
         : this._currentValueIndices;
-      nIdx ||= 0;
+      nIdx = nIdx || 0;
     }
 
     if (nIdx < 0 || nIdx >= this.numItems) {
@@ -410,10 +343,12 @@ class Field extends PDFObject {
           --this._currentValueIndices[index];
         }
       }
-    } else if (this._currentValueIndices === nIdx) {
-      this._currentValueIndices = this.numItems > 0 ? 0 : -1;
-    } else if (this._currentValueIndices > nIdx) {
-      --this._currentValueIndices;
+    } else {
+      if (this._currentValueIndices === nIdx) {
+        this._currentValueIndices = this.numItems > 0 ? 0 : -1;
+      } else if (this._currentValueIndices > nIdx) {
+        --this._currentValueIndices;
+      }
     }
 
     this._send({ id: this._id, remove: nIdx });
@@ -431,32 +366,15 @@ class Field extends PDFObject {
   }
 
   getArray() {
-    // Gets the array of terminal child fields (that is, fields that can have
-    // a value for this Field object, the parent field).
     if (this._kidIds) {
-      const array = [];
-      const fillArrayWithKids = kidIds => {
-        for (const id of kidIds) {
-          const obj = this._appObjects[id];
-          if (!obj) {
-            continue;
-          }
-          if (obj.obj._hasValue) {
-            array.push(obj.wrapped);
-          }
-          if (obj.obj._kidIds) {
-            fillArrayWithKids(obj.obj._kidIds);
-          }
-        }
-      };
-      fillArrayWithKids(this._kidIds);
-      return array;
+      return this._kidIds.map(id => this._appObjects[id].wrapped);
     }
 
     if (this._children === null) {
-      this._children = this._document.obj._getTerminalChildren(this._fieldPath);
+      this._children = this._document.obj
+        ._getChildren(this._fieldPath)
+        .map(child => child.wrapped);
     }
-
     return this._children;
   }
 
@@ -570,15 +488,14 @@ class Field extends PDFObject {
     }
 
     const actions = this._actions.get(eventName);
-    for (const action of actions) {
-      try {
+    try {
+      for (const action of actions) {
         // Action evaluation must happen in the global scope
         this._globalEval(action);
-      } catch (error) {
-        const serializedError = serializeError(error);
-        serializedError.value = `Error when executing "${eventName}" for field "${this._id}"\n${serializedError.value}`;
-        this._send(serializedError);
       }
+    } catch (error) {
+      event.rc = false;
+      throw error;
     }
 
     return true;
@@ -601,26 +518,13 @@ class RadioButtonField extends Field {
         this._id = radioData.id;
       }
     }
-
-    this._hasBeenInitialized = true;
-    this._value = data.value || "";
   }
-
-  get _siblings() {
-    return this._radioIds.filter(id => id !== this._id);
-  }
-
-  set _siblings(_) {}
 
   get value() {
     return this._value;
   }
 
   set value(value) {
-    if (!this._hasBeenInitialized) {
-      return;
-    }
-
     if (value === null || value === undefined) {
       this._value = "";
     }

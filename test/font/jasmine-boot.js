@@ -40,7 +40,7 @@
 
 "use strict";
 
-import { TestReporter } from "../reporter.js";
+import { TestReporter } from "../unit/testreporter.js";
 
 async function initializePDFJS(callback) {
   await Promise.all(
@@ -49,7 +49,10 @@ async function initializePDFJS(callback) {
       "pdfjs-test/font/font_os2_spec.js",
       "pdfjs-test/font/font_post_spec.js",
       "pdfjs-test/font/font_fpgm_spec.js",
-    ].map(moduleName => import(moduleName)) // eslint-disable-line no-unsanitized/method
+    ].map(function (moduleName) {
+      // eslint-disable-next-line no-unsanitized/method
+      return import(moduleName);
+    })
   );
 
   callback();
@@ -101,10 +104,10 @@ async function initializePDFJS(callback) {
       return document.body;
     },
     createElement() {
-      return document.createElement(...arguments);
+      return document.createElement.apply(document, arguments);
     },
     createTextNode() {
-      return document.createTextNode(...arguments);
+      return document.createTextNode.apply(document, arguments);
     },
     timer: new jasmine.Timer(),
   });

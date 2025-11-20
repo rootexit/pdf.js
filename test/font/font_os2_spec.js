@@ -17,55 +17,41 @@ describe("font_post", function () {
 
   describe("OS/2 table removal on bad post table values", function () {
     it("has invalid version number", async function () {
-      const font = new Font(
-        "font",
-        new Stream(font2154),
-        {
-          loadedName: "font",
-          type: "TrueType",
-          differences: [],
-          defaultEncoding: [],
-          toUnicode: new ToUnicodeMap([]),
-          xHeight: 0,
-          capHeight: 0,
-          italicAngle: 0,
-        },
-        {}
-      );
+      const font = new Font("font", new Stream(font2154), {
+        loadedName: "font",
+        type: "TrueType",
+        differences: [],
+        defaultEncoding: [],
+        toUnicode: new ToUnicodeMap([]),
+        xHeight: 0,
+        capHeight: 0,
+        italicAngle: 0,
+      });
       const output = await ttx(font.data);
 
       verifyTtxOutput(output);
-      expect(
-        /<OS_2>\s*<!--.*\r?\n.*-->\s*<version value="3"\/>/.test(output)
-      ).toEqual(true);
+      expect(/<OS_2>\s*<version value="3"\/>/.test(output)).toEqual(true);
     });
 
     it("has invalid selection attributes presence", async function () {
       const cMap = await CMapFactory.create({
         encoding: Name.get("Identity-H"),
       });
-      const font = new Font(
-        "font",
-        new Stream(font1282),
-        {
-          loadedName: "font",
-          type: "CIDFontType2",
-          differences: [],
-          defaultEncoding: [],
-          cMap,
-          toUnicode: new ToUnicodeMap([]),
-          xHeight: 0,
-          capHeight: 0,
-          italicAngle: 0,
-        },
-        {}
-      );
+      const font = new Font("font", new Stream(font1282), {
+        loadedName: "font",
+        type: "CIDFontType2",
+        differences: [],
+        defaultEncoding: [],
+        cMap,
+        toUnicode: new ToUnicodeMap([]),
+        xHeight: 0,
+        capHeight: 0,
+        italicAngle: 0,
+      });
       const output = await ttx(font.data);
 
       verifyTtxOutput(output);
-      expect(
-        /<OS_2>\s*<!--.*\r?\n.*-->\s*<version value="3"\/>/.test(output)
-      ).toEqual(true);
+      expect(/<OS_2>\s*<version value="3"\/>/.test(output)).toEqual(true);
     });
   });
 });

@@ -17,10 +17,7 @@ import { bytesToString, shadow, unreachable } from "../shared/util.js";
 
 class BaseStream {
   constructor() {
-    if (
-      (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) &&
-      this.constructor === BaseStream
-    ) {
+    if (this.constructor === BaseStream) {
       unreachable("Cannot initialize BaseStream.");
     }
   }
@@ -45,35 +42,6 @@ class BaseStream {
 
   getBytes(length) {
     unreachable("Abstract method `getBytes` called");
-  }
-
-  /**
-   * NOTE: This method can only be used to get image-data that is guaranteed
-   *       to be fully loaded, since otherwise intermittent errors may occur;
-   *       note the `ObjectLoader` class.
-   */
-  async getImageData(length, decoderOptions) {
-    return this.getBytes(length, decoderOptions);
-  }
-
-  async asyncGetBytes() {
-    unreachable("Abstract method `asyncGetBytes` called");
-  }
-
-  get isAsync() {
-    return false;
-  }
-
-  get isAsyncDecoder() {
-    return false;
-  }
-
-  get canAsyncDecodeImageFromBuffer() {
-    return false;
-  }
-
-  async getTransferableImage() {
-    return null;
   }
 
   peekByte() {
@@ -136,10 +104,6 @@ class BaseStream {
    */
   getBaseStreams() {
     return null;
-  }
-
-  getOriginalStream() {
-    return this.stream?.getOriginalStream() || this;
   }
 }
 

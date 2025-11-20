@@ -59,7 +59,7 @@ describe("AnnotationStorage", function () {
     it("should set a new value in the annotation storage", function () {
       const annotationStorage = new AnnotationStorage();
       annotationStorage.setValue("123A", { value: "an other string" });
-      const { value } = annotationStorage.getRawValue("123A");
+      const value = annotationStorage.getAll()["123A"].value;
       expect(value).toEqual("an other string");
     });
 

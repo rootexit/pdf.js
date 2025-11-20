@@ -1,7 +1,6 @@
 ---
 title: Examples
-layout: layout.njk
-slug: examples
+template: layout.jade
 ---
 
 ## Hello World Walkthrough
@@ -84,17 +83,17 @@ var scaledViewport = page.getViewport({ scale: scale, });
 The example demonstrates how promises can be used to handle errors during loading.
 It also demonstrates how to wait until a page is loaded and rendered.
 
-<script async src="https://jsfiddle.net/pdfjs/9engc9mw/embed/html,css,result/"></script>
+<script async src="//jsfiddle.net/pdfjs/9engc9mw/embed/js,html,css,result/"></script>
 
 ### Hello World using base64 encoded PDF
 
 The PDF.js can accept any decoded base64 data as an array.
 
-<script async src="https://jsfiddle.net/pdfjs/cq0asLqz/embed/html,css,result/"></script>
+<script async src="//jsfiddle.net/pdfjs/cq0asLqz/embed/js,html,css,result/"></script>
 
 ### Previous/Next example
 
 The same canvas cannot be used to perform to draw two pages at the same time --
 the example demonstrates how to wait on previous operation to be complete.
 
-<script async src="https://jsfiddle.net/pdfjs/wagvs9Lf/embed/html,css,result/"></script>
+<script async src="//jsfiddle.net/pdfjs/wagvs9Lf/embed/js,html,css,result/"></script>

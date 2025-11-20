@@ -13,37 +13,24 @@
  * limitations under the License.
  */
 
-import { assert, ResponseException } from "../shared/util.js";
+import {
+  assert,
+  MissingPDFException,
+  UnexpectedResponseException,
+} from "../shared/util.js";
 import { getFilenameFromContentDispositionHeader } from "./content_disposition.js";
 import { isPdfFile } from "./display_utils.js";
 
-function createHeaders(isHttp, httpHeaders) {
-  const headers = new Headers();
-
-  if (!isHttp || !httpHeaders || typeof httpHeaders !== "object") {
-    return headers;
-  }
-  for (const key in httpHeaders) {
-    const val = httpHeaders[key];
-    if (val !== undefined) {
-      headers.append(key, val);
-    }
-  }
-  return headers;
-}
-
-function getResponseOrigin(url) {
-  // Notably, null is distinct from "null" string (e.g. from file:-URLs).
-  return URL.parse(url)?.origin ?? null;
-}
-
 function validateRangeRequestCapabilities({
-  responseHeaders,
+  getResponseHeader,
   isHttp,
   rangeChunkSize,
   disableRange,
 }) {
-  if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
+  if (
+    typeof PDFJSDev === "undefined" ||
+    PDFJSDev.test("!PRODUCTION || TESTING")
+  ) {
     assert(
       Number.isInteger(rangeChunkSize) && rangeChunkSize > 0,
       "rangeChunkSize must be an integer larger than zero."
@@ -54,7 +41,7 @@ function validateRangeRequestCapabilities({
     suggestedLength: undefined,
   };
 
-  const length = parseInt(responseHeaders.get("Content-Length"), 10);
+  const length = parseInt(getResponseHeader("Content-Length"), 10);
   if (!Number.isInteger(length)) {
     return returnValues;
   }
@@ -70,11 +57,11 @@ function validateRangeRequestCapabilities({
   if (disableRange || !isHttp) {
     return returnValues;
   }
-  if (responseHeaders.get("Accept-Ranges") !== "bytes") {
+  if (getResponseHeader("Accept-Ranges") !== "bytes") {
     return returnValues;
   }
 
-  const contentEncoding = responseHeaders.get("Content-Encoding") || "identity";
+  const contentEncoding = getResponseHeader("Content-Encoding") || "identity";
   if (contentEncoding !== "identity") {
     return returnValues;
   }
@@ -83,14 +70,14 @@ function validateRangeRequestCapabilities({
   return returnValues;
 }
 
-function extractFilenameFromHeader(responseHeaders) {
-  const contentDisposition = responseHeaders.get("Content-Disposition");
+function extractFilenameFromHeader(getResponseHeader) {
+  const contentDisposition = getResponseHeader("Content-Disposition");
   if (contentDisposition) {
     let filename = getFilenameFromContentDispositionHeader(contentDisposition);
     if (filename.includes("%")) {
       try {
         filename = decodeURIComponent(filename);
-      } catch {}
+      } catch (ex) {}
     }
     if (isPdfFile(filename)) {
       return filename;
@@ -99,11 +86,13 @@ function extractFilenameFromHeader(responseHeaders) {
   return null;
 }
 
-function createResponseError(status, url) {
-  return new ResponseException(
+function createResponseStatusError(status, url) {
+  if (status === 404 || (status === 0 && url.startsWith("file:"))) {
+    return new MissingPDFException('Missing PDF "' + url + '".');
+  }
+  return new UnexpectedResponseException(
     `Unexpected server response (${status}) while retrieving PDF "${url}".`,
-    status,
-    /* missing = */ status === 404 || (status === 0 && url.startsWith("file:"))
+    status
   );
 }
 
@@ -112,10 +101,8 @@ function validateResponseStatus(status) {
 }
 
 export {
-  createHeaders,
-  createResponseError,
+  createResponseStatusError,
   extractFilenameFromHeader,
-  getResponseOrigin,
   validateRangeRequestCapabilities,
   validateResponseStatus,
 };

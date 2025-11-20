@@ -54,31 +54,34 @@ function addChildren(node, nodesToVisit) {
  * entire PDF document object graph to be traversed.
  */
 class ObjectLoader {
-  refSet = new RefSet();
-
   constructor(dict, keys, xref) {
     this.dict = dict;
     this.keys = keys;
     this.xref = xref;
+    this.refSet = null;
   }
 
   async load() {
+    // Don't walk the graph if all the data is already loaded.
+    if (this.xref.stream.isDataLoaded) {
+      return undefined;
+    }
+
     const { keys, dict } = this;
+    this.refSet = new RefSet();
     // Setup the initial nodes to visit.
     const nodesToVisit = [];
-    for (const key of keys) {
-      const rawValue = dict.getRaw(key);
+    for (let i = 0, ii = keys.length; i < ii; i++) {
+      const rawValue = dict.getRaw(keys[i]);
       // Skip nodes that are guaranteed to be empty.
       if (rawValue !== undefined) {
         nodesToVisit.push(rawValue);
       }
     }
-    await this.#walk(nodesToVisit);
-
-    this.refSet = null; // Everything is loaded, clear the cache.
+    return this._walk(nodesToVisit);
   }
 
-  async #walk(nodesToVisit) {
+  async _walk(nodesToVisit) {
     const nodesToRevisit = [];
     const pendingRequests = [];
     // DFS walk of the object graph.
@@ -96,10 +99,11 @@ class ObjectLoader {
           currentNode = this.xref.fetch(currentNode);
         } catch (ex) {
           if (!(ex instanceof MissingDataException)) {
-            warn(`ObjectLoader.#walk - requesting all data: "${ex}".`);
+            warn(`ObjectLoader._walk - requesting all data: "${ex}".`);
+            this.refSet = null;
 
-            await this.xref.stream.manager.requestAllChunks();
-            return;
+            const { manager } = this.xref.stream;
+            return manager.requestAllChunks();
           }
           nodesToRevisit.push(currentNode);
           pendingRequests.push({ begin: ex.begin, end: ex.end });
@@ -135,18 +139,11 @@ class ObjectLoader {
           this.refSet.remove(node);
         }
       }
-      await this.#walk(nodesToRevisit);
+      return this._walk(nodesToRevisit);
     }
-  }
-
-  static async load(obj, keys, xref) {
-    // Don't walk the graph if all the data is already loaded.
-    if (xref.stream.isDataLoaded) {
-      return;
-    }
-    // eslint-disable-next-line no-restricted-syntax
-    const objLoader = new ObjectLoader(obj, keys, xref);
-    await objLoader.load();
+    // Everything is loaded.
+    this.refSet = null;
+    return undefined;
   }
 }
 

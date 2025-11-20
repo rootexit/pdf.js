@@ -81,10 +81,11 @@ class GlyfTable {
   }
 
   getSize() {
-    return Math.sumPrecise(
+    return this.glyphs.reduce((a, g) => {
+      const size = g.getSize();
       // Round to next multiple of 4 if needed.
-      this.glyphs.map(g => (g.getSize() + 3) & ~3)
-    );
+      return a + ((size + 3) & ~3);
+    }, 0);
   }
 
   write() {
@@ -168,7 +169,7 @@ class Glyph {
     }
     const size = this.simple
       ? this.simple.getSize()
-      : Math.sumPrecise(this.composites.map(c => c.getSize()));
+      : this.composites.reduce((a, c) => a + c.getSize(), 0);
     return this.header.getSize() + size;
   }
 
@@ -618,15 +619,17 @@ class CompositeGlyph {
       ) {
         size += 2;
       }
-    } else if (
-      !(
-        this.argument1 >= 0 &&
-        this.argument1 <= 255 &&
-        this.argument2 >= 0 &&
-        this.argument2 <= 255
-      )
-    ) {
-      size += 2;
+    } else {
+      if (
+        !(
+          this.argument1 >= 0 &&
+          this.argument1 <= 255 &&
+          this.argument2 >= 0 &&
+          this.argument2 <= 255
+        )
+      ) {
+        size += 2;
+      }
     }
 
     return size;
@@ -647,15 +650,17 @@ class CompositeGlyph {
       ) {
         this.flags |= ARG_1_AND_2_ARE_WORDS;
       }
-    } else if (
-      !(
-        this.argument1 >= 0 &&
-        this.argument1 <= 255 &&
-        this.argument2 >= 0 &&
-        this.argument2 <= 255
-      )
-    ) {
-      this.flags |= ARG_1_AND_2_ARE_WORDS;
+    } else {
+      if (
+        !(
+          this.argument1 >= 0 &&
+          this.argument1 <= 255 &&
+          this.argument2 >= 0 &&
+          this.argument2 <= 255
+        )
+      ) {
+        this.flags |= ARG_1_AND_2_ARE_WORDS;
+      }
     }
 
     buf.setUint16(pos, this.flags);

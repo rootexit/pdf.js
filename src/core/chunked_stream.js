@@ -13,8 +13,12 @@
  * limitations under the License.
  */
 
-import { arrayBuffersToBytes, MissingDataException } from "./core_utils.js";
-import { assert } from "../shared/util.js";
+import {
+  arrayByteLength,
+  arraysToBytes,
+  createPromiseCapability,
+} from "../shared/util.js";
+import { MissingDataException } from "./core_utils.js";
 import { Stream } from "./stream.js";
 
 class ChunkedStream extends Stream {
@@ -207,7 +211,7 @@ class ChunkedStream extends Stream {
       if (start + length > this.progressiveDataLength) {
         this.ensureRange(start, start + length);
       }
-    } else if (start >= this.progressiveDataLength) {
+    } else {
       // When the `length` is undefined you do *not*, under any circumstances,
       // want to fallback on calling `this.ensureRange(start, this.end)` since
       // that would force the *entire* PDF file to be loaded, thus completely
@@ -217,7 +221,9 @@ class ChunkedStream extends Stream {
       // time/resources during e.g. parsing, since `MissingDataException`s will
       // require data to be re-parsed, which we attempt to minimize by at least
       // checking that the *beginning* of the data is available here.
-      this.ensureByte(start);
+      if (start >= this.progressiveDataLength) {
+        this.ensureByte(start);
+      }
     }
 
     function ChunkedStreamSubstream() {}
@@ -273,7 +279,11 @@ class ChunkedStreamManager {
     this.progressiveDataLength = 0;
     this.aborted = false;
 
-    this._loadedStreamCapability = Promise.withResolvers();
+    this._loadedStreamCapability = createPromiseCapability();
+  }
+
+  onLoadedStream() {
+    return this._loadedStreamCapability.promise;
   }
 
   sendRequest(begin, end) {
@@ -285,28 +295,21 @@ class ChunkedStreamManager {
     let chunks = [],
       loaded = 0;
     return new Promise((resolve, reject) => {
-      const readChunk = ({ value, done }) => {
+      const readChunk = chunk => {
         try {
-          if (done) {
-            const chunkData = arrayBuffersToBytes(chunks);
-            chunks = null;
-            resolve(chunkData);
+          if (!chunk.done) {
+            const data = chunk.value;
+            chunks.push(data);
+            loaded += arrayByteLength(data);
+            if (rangeReader.isStreamingSupported) {
+              this.onProgress({ loaded });
+            }
+            rangeReader.read().then(readChunk, reject);
             return;
           }
-          if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
-            assert(
-              value instanceof ArrayBuffer,
-              "readChunk (sendRequest) - expected an ArrayBuffer."
-            );
-          }
-          loaded += value.byteLength;
-
-          if (rangeReader.isStreamingSupported) {
-            this.onProgress({ loaded });
-          }
-
-          chunks.push(value);
-          rangeReader.read().then(readChunk, reject);
+          const chunkData = arraysToBytes(chunks);
+          chunks = null;
+          resolve(chunkData);
         } catch (e) {
           reject(e);
         }
@@ -324,11 +327,9 @@ class ChunkedStreamManager {
    * Get all the chunks that are not yet loaded and group them into
    * contiguous ranges to load in as few requests as possible.
    */
-  requestAllChunks(noFetch = false) {
-    if (!noFetch) {
-      const missingChunks = this.stream.getMissingChunks();
-      this._requestChunks(missingChunks);
-    }
+  requestAllChunks() {
+    const missingChunks = this.stream.getMissingChunks();
+    this._requestChunks(missingChunks);
     return this._loadedStreamCapability.promise;
   }
 
@@ -347,7 +348,7 @@ class ChunkedStreamManager {
       return Promise.resolve();
     }
 
-    const capability = Promise.withResolvers();
+    const capability = createPromiseCapability();
     this._promisesByRequest.set(requestId, capability);
 
     const chunksToRequest = [];
@@ -414,7 +415,9 @@ class ChunkedStreamManager {
       }
     }
 
-    chunksToRequest.sort((a, b) => a - b);
+    chunksToRequest.sort(function (a, b) {
+      return a - b;
+    });
     return this._requestChunks(chunksToRequest);
   }
 
@@ -544,8 +547,9 @@ class ChunkedStreamManager {
 
   abort(reason) {
     this.aborted = true;
-    this.pdfNetworkStream?.cancelAllRequests(reason);
-
+    if (this.pdfNetworkStream) {
+      this.pdfNetworkStream.cancelAllRequests(reason);
+    }
     for (const capability of this._promisesByRequest.values()) {
       capability.reject(reason);
     }

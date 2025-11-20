@@ -13,18 +13,16 @@
  * limitations under the License.
  */
 
-import {
-  FORMS_VERSION,
-  USERACTIVATION_CALLBACKID,
-  VIEWER_TYPE,
-  VIEWER_VARIATION,
-  VIEWER_VERSION,
-} from "./app_utils.js";
 import { Color } from "./color.js";
 import { EventDispatcher } from "./event.js";
 import { FullScreen } from "./fullscreen.js";
 import { PDFObject } from "./pdf_object.js";
 import { Thermometer } from "./thermometer.js";
+
+const VIEWER_TYPE = "PDF.js";
+const VIEWER_VARIATION = "Full";
+const VIEWER_VERSION = 21.00720099;
+const FORMS_VERSION = 21.00720099;
 
 class App extends PDFObject {
   constructor(data) {
@@ -47,8 +45,7 @@ class App extends PDFObject {
     this._eventDispatcher = new EventDispatcher(
       this._document,
       data.calculationOrder,
-      this._objects,
-      data.externalCall
+      this._objects
     );
 
     this._timeoutIds = new WeakMap();
@@ -66,9 +63,10 @@ class App extends PDFObject {
     }
 
     this._timeoutCallbackIds = new Map();
-    this._timeoutCallbackId = USERACTIVATION_CALLBACKID + 1;
+    this._timeoutCallbackId = 0;
     this._globalEval = data.globalEval;
     this._externalCall = data.externalCall;
+    this._document = data._document;
   }
 
   // This function is called thanks to the proxy
@@ -88,24 +86,13 @@ class App extends PDFObject {
   }
 
   _evalCallback({ callbackId, interval }) {
-    const documentObj = this._document.obj;
-    if (callbackId === USERACTIVATION_CALLBACKID) {
-      // Special callback id for userActivation stuff.
-      documentObj._userActivation = false;
-      return;
-    }
     const expr = this._timeoutCallbackIds.get(callbackId);
     if (!interval) {
       this._unregisterTimeoutCallback(callbackId);
     }
 
     if (expr) {
-      const saveUserActivation = documentObj._userActivation;
-      // A setTimeout/setInterval callback is executed so it can't be a user
-      // choice.
-      documentObj._userActivation = false;
       this._globalEval(expr);
-      documentObj._userActivation = saveUserActivation;
     }
   }
 
@@ -113,12 +100,16 @@ class App extends PDFObject {
     const timeout = Object.create(null);
     const id = { callbackId, interval };
     this._timeoutIds.set(timeout, id);
-    this._timeoutIdsRegistry?.register(timeout, id);
+    if (this._timeoutIdsRegistry) {
+      this._timeoutIdsRegistry.register(timeout, id);
+    }
     return timeout;
   }
 
   _unregisterTimeout(timeout) {
-    this._timeoutIdsRegistry?.unregister(timeout);
+    if (this._timeoutIdsRegistry) {
+      this._timeoutIdsRegistry.unregister(timeout);
+    }
 
     const data = this._timeoutIds.get(timeout);
     if (!data) {
@@ -208,15 +199,18 @@ class App extends PDFObject {
   }
 
   get constants() {
-    return (this._constants ??= Object.freeze({
-      align: Object.freeze({
-        left: 0,
-        center: 1,
-        right: 2,
-        top: 3,
-        bottom: 4,
-      }),
-    }));
+    if (!this._constants) {
+      this._constants = Object.freeze({
+        align: Object.freeze({
+          left: 0,
+          center: 1,
+          right: 2,
+          top: 3,
+          bottom: 4,
+        }),
+      });
+    }
+    return this._constants;
   }
 
   set constants(_) {
@@ -440,19 +434,11 @@ class App extends PDFObject {
     oDoc = null,
     oCheckbox = null
   ) {
-    if (!this._document.obj._userActivation) {
-      return 0;
-    }
-    this._document.obj._userActivation = false;
-
     if (cMsg && typeof cMsg === "object") {
       nType = cMsg.nType;
       cMsg = cMsg.cMsg;
     }
     cMsg = (cMsg || "").toString();
-    if (!cMsg) {
-      return 0;
-    }
     nType =
       typeof nType !== "number" || isNaN(nType) || nType < 0 || nType > 3
         ? 0
@@ -494,18 +480,8 @@ class App extends PDFObject {
   }
 
   execMenuItem(item) {
-    if (!this._document.obj._userActivation) {
-      return;
-    }
-    this._document.obj._userActivation = false;
-
     switch (item) {
       case "SaveAs":
-        if (this._document.obj._disableSaving) {
-          return;
-        }
-        this._send({ command: item });
-        break;
       case "FirstPage":
       case "LastPage":
       case "NextPage":
@@ -518,9 +494,6 @@ class App extends PDFObject {
         this._send({ command: "zoom", value: "page-fit" });
         break;
       case "Print":
-        if (this._document.obj._disablePrinting) {
-          return;
-        }
         this._send({ command: "print" });
         break;
     }
@@ -607,11 +580,6 @@ class App extends PDFObject {
   }
 
   response(cQuestion, cTitle = "", cDefault = "", bPassword = "", cLabel = "") {
-    if (!this._document.obj._userActivation) {
-      return null;
-    }
-    this._document.obj._userActivation = false;
-
     if (cQuestion && typeof cQuestion === "object") {
       cDefault = cQuestion.cDefault;
       cQuestion = cQuestion.cQuestion;

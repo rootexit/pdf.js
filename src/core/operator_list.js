@@ -14,11 +14,10 @@
  */
 
 import {
-  DrawOPS,
   ImageKind,
   OPS,
   RenderingIntentFlag,
-  Util,
+  shadow,
   warn,
 } from "../shared/util.js";
 
@@ -26,9 +25,9 @@ function addState(parentState, pattern, checkFn, iterateFn, processFn) {
   let state = parentState;
   for (let i = 0, ii = pattern.length - 1; i < ii; i++) {
     const item = pattern[i];
-    state = state[item] ||= [];
+    state = state[item] || (state[item] = []);
   }
-  state[pattern.at(-1)] = {
+  state[pattern[pattern.length - 1]] = {
     checkFn,
     iterateFn,
     processFn,
@@ -137,32 +136,17 @@ addState(
       }
     }
 
-    const img = {
-      width: imgWidth,
-      height: imgHeight,
-    };
-    if (context.isOffscreenCanvasSupported) {
-      const canvas = new OffscreenCanvas(imgWidth, imgHeight);
-      const ctx = canvas.getContext("2d");
-      ctx.putImageData(
-        new ImageData(
-          new Uint8ClampedArray(imgData.buffer),
-          imgWidth,
-          imgHeight
-        ),
-        0,
-        0
-      );
-      img.bitmap = canvas.transferToImageBitmap();
-      img.data = null;
-    } else {
-      img.kind = ImageKind.RGBA_32BPP;
-      img.data = imgData;
-    }
-
     // Replace queue items.
     fnArray.splice(iFirstSave, count * 4, OPS.paintInlineImageXObjectGroup);
-    argsArray.splice(iFirstSave, count * 4, [img, map]);
+    argsArray.splice(iFirstSave, count * 4, [
+      {
+        width: imgWidth,
+        height: imgHeight,
+        kind: ImageKind.RGBA_32BPP,
+        data: imgData,
+      },
+      map,
+    ]);
 
     return iFirstSave + 1;
   }
@@ -477,72 +461,6 @@ addState(
   }
 );
 
-// This replaces (save, transform, constructPath, restore)
-// sequences with |constructPath| operation.
-addState(
-  InitialState,
-  [OPS.save, OPS.transform, OPS.constructPath, OPS.restore],
-  context => {
-    const argsArray = context.argsArray;
-    const iFirstConstructPath = context.iCurr - 1;
-    const op = argsArray[iFirstConstructPath][0];
-
-    // When stroking the transform has to be applied to the line width too.
-    // So we can only optimize if the transform is an identity.
-    if (
-      op !== OPS.stroke &&
-      op !== OPS.closeStroke &&
-      op !== OPS.fillStroke &&
-      op !== OPS.eoFillStroke &&
-      op !== OPS.closeFillStroke &&
-      op !== OPS.closeEOFillStroke
-    ) {
-      return true;
-    }
-    const iFirstTransform = context.iCurr - 2;
-    const transform = argsArray[iFirstTransform];
-    return (
-      transform[0] === 1 &&
-      transform[1] === 0 &&
-      transform[2] === 0 &&
-      transform[3] === 1
-    );
-  },
-  () => false,
-  (context, i) => {
-    const { fnArray, argsArray } = context;
-    const curr = context.iCurr;
-    const iFirstSave = curr - 3;
-    const iFirstTransform = curr - 2;
-    const iFirstConstructPath = curr - 1;
-    const args = argsArray[iFirstConstructPath];
-    const transform = argsArray[iFirstTransform];
-    const [, [buffer], minMax] = args;
-
-    if (minMax) {
-      Util.scaleMinMax(transform, minMax);
-      for (let k = 0, kk = buffer.length; k < kk; ) {
-        switch (buffer[k++]) {
-          case DrawOPS.moveTo:
-          case DrawOPS.lineTo:
-            Util.applyTransform(buffer, transform, k);
-            k += 2;
-            break;
-          case DrawOPS.curveTo:
-            Util.applyTransformToBezier(buffer, transform, k);
-            k += 6;
-            break;
-        }
-      }
-    }
-    // Replace queue items.
-    fnArray.splice(iFirstSave, 4, OPS.constructPath);
-    argsArray.splice(iFirstSave, 4, args);
-
-    return iFirstSave + 1;
-  }
-);
-
 class NullOptimizer {
   constructor(queue) {
     this.queue = queue;
@@ -569,7 +487,6 @@ class QueueOptimizer extends NullOptimizer {
       iCurr: 0,
       fnArray: queue.fnArray,
       argsArray: queue.argsArray,
-      isOffscreenCanvasSupported: OperatorList.isOffscreenCanvasSupported,
     };
     this.match = null;
     this.lastProcessed = 0;
@@ -648,29 +565,28 @@ class QueueOptimizer extends NullOptimizer {
 }
 
 class OperatorList {
-  static CHUNK_SIZE = 1000;
+  static get CHUNK_SIZE() {
+    return shadow(this, "CHUNK_SIZE", 1000);
+  }
 
   // Close to chunk size.
-  static CHUNK_SIZE_ABOUT = this.CHUNK_SIZE - 5;
-
-  static isOffscreenCanvasSupported = false;
+  static get CHUNK_SIZE_ABOUT() {
+    return shadow(this, "CHUNK_SIZE_ABOUT", this.CHUNK_SIZE - 5);
+  }
 
   constructor(intent = 0, streamSink) {
     this._streamSink = streamSink;
     this.fnArray = [];
     this.argsArray = [];
-    this.optimizer =
-      streamSink && !(intent & RenderingIntentFlag.OPLIST)
-        ? new QueueOptimizer(this)
-        : new NullOptimizer(this);
+    if (streamSink && !(intent & RenderingIntentFlag.OPLIST)) {
+      this.optimizer = new QueueOptimizer(this);
+    } else {
+      this.optimizer = new NullOptimizer(this);
+    }
     this.dependencies = new Set();
     this._totalLength = 0;
     this.weight = 0;
     this._resolved = streamSink ? null : Promise.resolve();
-  }
-
-  static setOptions({ isOffscreenCanvasSupported }) {
-    this.isOffscreenCanvasSupported = isOffscreenCanvasSupported;
   }
 
   get length() {
@@ -705,11 +621,7 @@ class OperatorList {
     }
   }
 
-  addImageOps(fn, args, optionalContent, hasMask = false) {
-    if (hasMask) {
-      this.addOp(OPS.save);
-      this.addOp(OPS.setGState, [[["SMask", false]]]);
-    }
+  addImageOps(fn, args, optionalContent) {
     if (optionalContent !== undefined) {
       this.addOp(OPS.beginMarkedContentProps, ["OC", optionalContent]);
     }
@@ -718,9 +630,6 @@ class OperatorList {
 
     if (optionalContent !== undefined) {
       this.addOp(OPS.endMarkedContent, []);
-    }
-    if (hasMask) {
-      this.addOp(OPS.restore);
     }
   }
 
@@ -766,38 +675,22 @@ class OperatorList {
       switch (fnArray[i]) {
         case OPS.paintInlineImageXObject:
         case OPS.paintInlineImageXObjectGroup:
-        case OPS.paintImageMaskXObject: {
-          const { bitmap, data } = argsArray[i][0]; // First parameter in imgData.
-          if (bitmap || data?.buffer) {
-            transfers.push(bitmap || data.buffer);
+        case OPS.paintImageMaskXObject:
+          const arg = argsArray[i][0]; // First parameter in imgData.
+          if (
+            !arg.cached &&
+            arg.data &&
+            arg.data.buffer instanceof ArrayBuffer
+          ) {
+            transfers.push(arg.data.buffer);
           }
-          break;
-        }
-        case OPS.constructPath: {
-          const [, [data], minMax] = argsArray[i];
-          if (data) {
-            transfers.push(data.buffer, minMax.buffer);
-          }
-          break;
-        }
-        case OPS.paintFormXObjectBegin:
-          const [matrix, bbox] = argsArray[i];
-          if (matrix) {
-            transfers.push(matrix.buffer);
-          }
-          if (bbox) {
-            transfers.push(bbox.buffer);
-          }
-          break;
-        case OPS.setTextMatrix:
-          transfers.push(argsArray[i][0].buffer);
           break;
       }
     }
     return transfers;
   }
 
-  flush(lastChunk = false, separateAnnots = null) {
+  flush(lastChunk = false) {
     this.optimizer.flush();
     const length = this.length;
     this._totalLength += length;
@@ -807,7 +700,6 @@ class OperatorList {
         fnArray: this.fnArray,
         argsArray: this.argsArray,
         lastChunk,
-        separateAnnots,
         length,
       },
       1,

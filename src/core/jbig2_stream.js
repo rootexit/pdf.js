@@ -44,14 +44,9 @@ class Jbig2Stream extends DecodeStream {
   }
 
   readBlock() {
-    this.decodeImage();
-  }
-
-  decodeImage(bytes) {
     if (this.eof) {
-      return this.buffer;
+      return;
     }
-    bytes ||= this.bytes;
     const jbig2Image = new Jbig2Image();
 
     const chunks = [];
@@ -62,7 +57,7 @@ class Jbig2Stream extends DecodeStream {
         chunks.push({ data: globals, start: 0, end: globals.length });
       }
     }
-    chunks.push({ data: bytes, start: 0, end: bytes.length });
+    chunks.push({ data: this.bytes, start: 0, end: this.bytes.length });
     const data = jbig2Image.parseChunks(chunks);
     const dataLength = data.length;
 
@@ -73,12 +68,6 @@ class Jbig2Stream extends DecodeStream {
     this.buffer = data;
     this.bufferLength = dataLength;
     this.eof = true;
-
-    return this.buffer;
-  }
-
-  get canAsyncDecodeImageFromBuffer() {
-    return this.stream.isAsync;
   }
 }
 

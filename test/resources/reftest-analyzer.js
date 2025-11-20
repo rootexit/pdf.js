@@ -79,7 +79,7 @@ window.onload = function () {
     r.setAttribute("y", (gMagZoom * -gMagHeight) / 2);
     r.setAttribute("width", gMagZoom * gMagWidth);
     r.setAttribute("height", gMagZoom * gMagHeight);
-    mag.append(r);
+    mag.appendChild(r);
     mag.setAttribute(
       "transform",
       "translate(" +
@@ -124,7 +124,8 @@ window.onload = function () {
         p2.setAttribute("stroke-width", "1px");
         p2.setAttribute("fill", "#888");
 
-        mag.append(p1, p2);
+        mag.appendChild(p1);
+        mag.appendChild(p2);
         gMagPixPaths[x][y] = [p1, p2];
       }
     }
@@ -214,9 +215,9 @@ window.onload = function () {
         const extra = match[4];
 
         gTestItems.push({
-          pass: !state.endsWith("FAIL"),
+          pass: !state.match(/FAIL$/),
           // only one of the following three should ever be true
-          unexpected: state.startsWith("TEST-UNEXPECTED"),
+          unexpected: !!state.match(/^TEST-UNEXPECTED/),
           random: random === "(EXPECTED RANDOM)",
           skip: extra === " (SKIP)",
           url,
@@ -224,11 +225,9 @@ window.onload = function () {
         });
         continue;
       }
-      match = line.match(
-        /^ {2}IMAGE[^:]*\((\d+\.?\d*)x(\d+\.?\d*)x(\d+\.?\d*)\): (.*)$/
-      );
+      match = line.match(/^ {2}IMAGE[^:]*\((\d+)x(\d+)x(\d+)\): (.*)$/);
       if (match) {
-        const item = gTestItems.at(-1);
+        const item = gTestItems[gTestItems.length - 1];
         item.images.push({
           width: parseFloat(match[1]),
           height: parseFloat(match[2]),
@@ -250,7 +249,7 @@ window.onload = function () {
     const table = document.getElementById("itemtable");
     table.textContent = ""; // Remove any table contents from the DOM.
     const tbody = document.createElement("tbody");
-    table.append(tbody);
+    table.appendChild(tbody);
 
     for (const i in gTestItems) {
       const item = gTestItems[i];
@@ -275,8 +274,8 @@ window.onload = function () {
         text += "S";
         rowclass += " skip";
       }
-      td.append(document.createTextNode(text));
-      tr.append(td);
+      td.appendChild(document.createTextNode(text));
+      tr.appendChild(td);
 
       td = document.createElement("td");
       td.id = "url" + i;
@@ -289,20 +288,20 @@ window.onload = function () {
         a.id = i;
         a.className = "image";
         a.href = "#";
-        a.append(text);
-        td.append(a);
+        a.appendChild(text);
+        td.appendChild(a);
       } else {
-        td.append(text);
+        td.appendChild(text);
       }
-      tr.append(td);
+      tr.appendChild(td);
       tr.className = rowclass;
-      tbody.append(tr);
+      tbody.appendChild(tr);
     }
 
     // Bind an event handler to each image link
     const images = document.getElementsByClassName("image");
-    for (const image of images) {
-      image.addEventListener(
+    for (let i = 0; i < images.length; i++) {
+      images[i].addEventListener(
         "click",
         function (e) {
           showImages(e.target.id);
@@ -407,9 +406,9 @@ window.onload = function () {
   function flashPixels(on) {
     const stroke = on ? "#FF0000" : "#CCC";
     const strokeWidth = on ? "2px" : "1px";
-    for (const pixel of gFlashingPixels) {
-      pixel.setAttribute("stroke", stroke);
-      pixel.setAttribute("stroke-width", strokeWidth);
+    for (let i = 0; i < gFlashingPixels.length; i++) {
+      gFlashingPixels[i].setAttribute("stroke", stroke);
+      gFlashingPixels[i].setAttribute("stroke-width", strokeWidth);
     }
   }
 
@@ -480,8 +479,8 @@ window.onload = function () {
           p2.setAttribute("fill", color2);
           if (color1 !== color2) {
             gFlashingPixels.push(p1, p2);
-            p1.parentNode.append(p1);
-            p2.parentNode.append(p2);
+            p1.parentNode.appendChild(p1);
+            p2.parentNode.appendChild(p2);
           }
           if (i === 0 && j === 0) {
             centerPixelColor1 = color1;

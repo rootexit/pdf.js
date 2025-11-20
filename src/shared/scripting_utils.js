@@ -26,10 +26,6 @@ function makeColorComp(n) {
     .padStart(2, "0");
 }
 
-function scaleAndClamp(x) {
-  return Math.max(0, Math.min(255, 255 * x));
-}
-
 // PDF specifications section 10.3
 class ColorConverters {
   static CMYK_G([c, y, m, k]) {
@@ -44,11 +40,6 @@ class ColorConverters {
     return ["RGB", g, g, g];
   }
 
-  static G_rgb([g]) {
-    g = scaleAndClamp(g);
-    return [g, g, g];
-  }
-
   static G_HTML([g]) {
     const G = makeColorComp(g);
     return `#${G}${G}${G}`;
@@ -58,20 +49,15 @@ class ColorConverters {
     return ["G", 0.3 * r + 0.59 * g + 0.11 * b];
   }
 
-  static RGB_rgb(color) {
-    return color.map(scaleAndClamp);
-  }
-
-  static RGB_HTML(color) {
-    return `#${color.map(makeColorComp).join("")}`;
+  static RGB_HTML([r, g, b]) {
+    const R = makeColorComp(r);
+    const G = makeColorComp(g);
+    const B = makeColorComp(b);
+    return `#${R}${G}${B}`;
   }
 
   static T_HTML() {
     return "#00000000";
-  }
-
-  static T_rgb() {
-    return [null];
   }
 
   static CMYK_RGB([c, y, m, k]) {
@@ -83,17 +69,8 @@ class ColorConverters {
     ];
   }
 
-  static CMYK_rgb([c, y, m, k]) {
-    return [
-      scaleAndClamp(1 - Math.min(1, c + k)),
-      scaleAndClamp(1 - Math.min(1, m + k)),
-      scaleAndClamp(1 - Math.min(1, y + k)),
-    ];
-  }
-
   static CMYK_HTML(components) {
-    const rgb = this.CMYK_RGB(components).slice(1);
-    return this.RGB_HTML(rgb);
+    return this.RGB_HTML(this.CMYK_RGB(components));
   }
 
   static RGB_CMYK([r, g, b]) {
@@ -105,22 +82,4 @@ class ColorConverters {
   }
 }
 
-const DateFormats = [
-  "m/d",
-  "m/d/yy",
-  "mm/dd/yy",
-  "mm/yy",
-  "d-mmm",
-  "d-mmm-yy",
-  "dd-mmm-yy",
-  "yy-mm-dd",
-  "mmm-yy",
-  "mmmm-yy",
-  "mmm d, yyyy",
-  "mmmm d, yyyy",
-  "m/d/yy h:MM tt",
-  "m/d/yy HH:MM",
-];
-const TimeFormats = ["HH:MM", "h:MM tt", "HH:MM:ss", "h:MM:ss tt"];
-
-export { ColorConverters, DateFormats, TimeFormats };
+export { ColorConverters };

@@ -13,7 +13,9 @@
  * limitations under the License.
  */
 
-const sandboxBundleSrc = "../../build/generic/build/pdf.sandbox.mjs";
+import { loadScript } from "../../src/display/display_utils.js";
+
+const sandboxBundleSrc = "../../build/generic/build/pdf.sandbox.js";
 
 describe("Scripting", function () {
   let sandbox, send_queue, test_id, ref, windowAlert;
@@ -51,10 +53,9 @@ describe("Scripting", function () {
       const command = "alert";
       send_queue.set(command, { command, value });
     };
-    // eslint-disable-next-line no-unsanitized/method
-    const promise = import(sandboxBundleSrc).then(pdfjsSandbox =>
-      pdfjsSandbox.QuickJSSandbox()
-    );
+    const promise = loadScript(sandboxBundleSrc).then(() => {
+      return window.pdfjsSandbox.QuickJSSandbox();
+    });
     sandbox = {
       createSandbox(data) {
         promise.then(sbx => sbx.create(data));
@@ -119,7 +120,6 @@ describe("Scripting", function () {
       expect(send_queue.has(refId)).toEqual(true);
       expect(send_queue.get(refId)).toEqual({
         id: refId,
-        siblings: null,
         value: expected,
         formattedValue: null,
       });
@@ -152,12 +152,14 @@ describe("Scripting", function () {
     });
 
     it("should get field using a path", async () => {
-      const base = value => ({
-        id: getId(),
-        value,
-        actions: {},
-        type: "text",
-      });
+      const base = value => {
+        return {
+          id: getId(),
+          value,
+          actions: {},
+          type: "text",
+        };
+      };
       const data = {
         objects: {
           A: [base(1)],
@@ -197,7 +199,7 @@ describe("Scripting", function () {
       value = await myeval(
         `this.getField("A.B.C.D").getArray().map((x) => x.value)`
       );
-      expect(value).toEqual([4, 5, 6, 7]);
+      expect(value).toEqual([5, 7]);
     });
   });
 
@@ -243,12 +245,6 @@ describe("Scripting", function () {
 
         value = await myeval(`util.scand(2, "4/15/07 3:14:15 am").toString()`);
         expect(new Date(value)).toEqual(date);
-
-        value = await myeval(`util.scand("mmddyyyy", "07/15/2007").toString()`);
-        expect(new Date(value)).toEqual(new Date("07/15/2007 12:00:00"));
-
-        value = await myeval(`util.scand("mmddyyyy", "07a15b2007").toString()`);
-        expect(new Date(value)).toEqual(new Date("07/15/2007 12:00:00"));
       });
     });
 
@@ -283,18 +279,6 @@ describe("Scripting", function () {
           `util.printf("Decimal number: %,0.2f", -12.34567)`
         );
         expect(value).toEqual("Decimal number: -12.35");
-
-        value = await myeval(`util.printf("Decimal number: %,0.0f", 4.95)`);
-        expect(value).toEqual("Decimal number: 5");
-
-        value = await myeval(`util.printf("Decimal number: %,0.0f", 4.49)`);
-        expect(value).toEqual("Decimal number: 4");
-
-        value = await myeval(`util.printf("Decimal number: %,0.0f", -4.95)`);
-        expect(value).toEqual("Decimal number: -5");
-
-        value = await myeval(`util.printf("Decimal number: %,0.0f", -4.49)`);
-        expect(value).toEqual("Decimal number: -4");
       });
 
       it("should print a string with no argument", async () => {
@@ -385,7 +369,6 @@ describe("Scripting", function () {
       expect(send_queue.has(refId)).toEqual(true);
       expect(send_queue.get(refId)).toEqual({
         id: refId,
-        siblings: null,
         value: "hell",
         selRange: [4, 4],
       });
@@ -423,7 +406,6 @@ describe("Scripting", function () {
       expect(send_queue.has(refId)).toEqual(true);
       expect(send_queue.get(refId)).toEqual({
         id: refId,
-        siblings: null,
         value: "hella",
         selRange: [5, 5],
       });
@@ -497,7 +479,6 @@ describe("Scripting", function () {
       expect(send_queue.has(refId1)).toEqual(true);
       expect(send_queue.get(refId1)).toEqual({
         id: refId1,
-        siblings: null,
         value: "world",
         formattedValue: null,
       });
@@ -607,52 +588,6 @@ describe("Scripting", function () {
       value = await myeval(`app.platform = "hello"`);
       expect(value).toEqual("app.platform is read-only");
     });
-
-    it("shouldn't display an alert", async () => {
-      const refId = getId();
-      const data = {
-        objects: {
-          field: [
-            {
-              id: refId,
-              value: "",
-              actions: {
-                Validate: [`app.alert(event.value);`],
-              },
-              type: "text",
-              name: "MyField",
-            },
-          ],
-        },
-        appInfo: { language: "en-US", platform: "Linux x86_64" },
-        calculationOrder: [],
-        dispatchEventName: "_dispatchMe",
-      };
-
-      sandbox.createSandbox(data);
-      await sandbox.dispatchEventInSandbox({
-        id: refId,
-        value: "hello",
-        name: "Keystroke",
-        willCommit: true,
-      });
-      expect(send_queue.has("alert")).toEqual(true);
-      expect(send_queue.get("alert")).toEqual({
-        command: "alert",
-        value: "hello",
-      });
-      send_queue.delete(refId);
-      send_queue.delete("alert");
-
-      await sandbox.dispatchEventInSandbox({
-        id: refId,
-        value: "",
-        name: "Keystroke",
-        willCommit: true,
-      });
-      expect(send_queue.has("alert")).toEqual(false);
-      send_queue.delete(refId);
-    });
   });
 
   describe("AForm", function () {
@@ -669,27 +604,14 @@ describe("Scripting", function () {
       it("should parse a date with a format", async () => {
         const check = async (date, format, expected) => {
           const value = await myeval(
-            `AFParseDateEx("${date}", "${format}").toISOString().replace(/T.*$/, "")`
+            `AFParseDateEx("${date}", "${format}").toISOString()`
           );
-          expect(value).toEqual(
-            new Date(expected).toISOString().replace(/T.*$/, "")
-          );
+          expect(value).toEqual(new Date(expected).toISOString());
         };
 
         await check("05", "dd", "2000/01/05");
         await check("12", "mm", "2000/12/01");
         await check("2022", "yyyy", "2022/01/01");
-        await check("a1$9bbbb21", "dd/mm/yyyy", "2021/09/01");
-        await check("1/2/2024", "dd/mm/yyyy", "2024/02/01");
-        await check("01/2/2024", "dd/mm/yyyy", "2024/02/01");
-        await check("1/02/2024", "dd/mm/yyyy", "2024/02/01");
-        await check("01/02/2024", "dd/mm/yyyy", "2024/02/01");
-
-        // The following test isn't working as expected because
-        // the quickjs date parser has been replaced by the browser one
-        // and the date "1.9.2021" is valid in Chrome but not in Firefox.
-        // The supported date format is not specified...
-        // await check("1.9.2021", "dd/mm/yyyy", "2021/09/01");
       });
     });
 
@@ -770,11 +692,6 @@ describe("Scripting", function () {
                     `AFNumber_Format(2, 0, 3, 0, "€", false);` +
                       `event.source.value = event.value;`,
                   ],
-                  test6: [
-                    `event.value = 0;` +
-                      `AFNumber_Format(2, 0, 0, 0, "€", false);` +
-                      `event.source.value = event.value;`,
-                  ],
                 },
                 type: "text",
               },
@@ -786,30 +703,6 @@ describe("Scripting", function () {
         };
 
         sandbox.createSandbox(data);
-        await sandbox.dispatchEventInSandbox({
-          id: refId,
-          value: "0",
-          name: "test1",
-        });
-        expect(send_queue.has(refId)).toEqual(true);
-        expect(send_queue.get(refId)).toEqual({
-          id: refId,
-          value: "0.00€",
-        });
-        send_queue.delete(refId);
-
-        await sandbox.dispatchEventInSandbox({
-          id: refId,
-          value: "",
-          name: "test6",
-        });
-        expect(send_queue.has(refId)).toEqual(true);
-        expect(send_queue.get(refId)).toEqual({
-          id: refId,
-          value: "0.00€",
-        });
-        send_queue.delete(refId);
-
         await sandbox.dispatchEventInSandbox({
           id: refId,
           value: "123456.789",
@@ -907,7 +800,6 @@ describe("Scripting", function () {
         expect(send_queue.has(refId)).toEqual(true);
         expect(send_queue.get(refId)).toEqual({
           id: refId,
-          siblings: null,
           value: "123456.789",
           formattedValue: null,
         });
@@ -1054,91 +946,6 @@ describe("Scripting", function () {
           value: "4/15/07 3:14 am",
         });
       });
-
-      it("should format a date (cFormat)", async () => {
-        const refId = getId();
-        const data = {
-          objects: {
-            field: [
-              {
-                id: refId,
-                value: "",
-                actions: {
-                  Format: [`AFDate_FormatEx("mm.dd.yyyy");`],
-                  Keystroke: [`AFDate_KeystrokeEx("mm.dd.yyyy");`],
-                },
-                type: "text",
-              },
-            ],
-          },
-          appInfo: { language: "en-US", platform: "Linux x86_64" },
-          calculationOrder: [],
-          dispatchEventName: "_dispatchMe",
-        };
-
-        sandbox.createSandbox(data);
-        await sandbox.dispatchEventInSandbox({
-          id: refId,
-          value: "12.06.2023",
-          name: "Keystroke",
-          willCommit: true,
-        });
-        expect(send_queue.has(refId)).toEqual(true);
-        expect(send_queue.get(refId)).toEqual({
-          id: refId,
-          siblings: null,
-          value: "12.06.2023",
-          formattedValue: "12.06.2023",
-        });
-        send_queue.delete(refId);
-
-        await sandbox.dispatchEventInSandbox({
-          id: refId,
-          value: "12.06.202",
-          name: "Keystroke",
-          willCommit: true,
-        });
-        expect(send_queue.has(refId)).toEqual(true);
-        expect(send_queue.get(refId)).toEqual({
-          id: refId,
-          siblings: null,
-          value: "12.06.202",
-          formattedValue: "12.06.0202",
-        });
-        send_queue.delete(refId);
-
-        sandbox.createSandbox(data);
-        await sandbox.dispatchEventInSandbox({
-          id: refId,
-          value: "02.06.2023",
-          name: "Keystroke",
-          willCommit: true,
-        });
-        expect(send_queue.has(refId)).toEqual(true);
-        expect(send_queue.get(refId)).toEqual({
-          id: refId,
-          siblings: null,
-          value: "02.06.2023",
-          formattedValue: "02.06.2023",
-        });
-        send_queue.delete(refId);
-
-        sandbox.createSandbox(data);
-        await sandbox.dispatchEventInSandbox({
-          id: refId,
-          value: "2.6.2023",
-          name: "Keystroke",
-          willCommit: true,
-        });
-        expect(send_queue.has(refId)).toEqual(true);
-        expect(send_queue.get(refId)).toEqual({
-          id: refId,
-          siblings: null,
-          value: "2.6.2023",
-          formattedValue: "02.06.2023",
-        });
-        send_queue.delete(refId);
-      });
     });
 
     describe("AFRange_Validate", function () {
@@ -1172,7 +979,6 @@ describe("Scripting", function () {
         expect(send_queue.has(refId)).toEqual(true);
         expect(send_queue.get(refId)).toEqual({
           id: refId,
-          siblings: null,
           value: "321",
           formattedValue: null,
         });
@@ -1214,9 +1020,9 @@ describe("Scripting", function () {
       });
     });
 
-    describe("AFSimple_Calculate", function () {
+    describe("ASSimple_Calculate", function () {
       it("should compute the sum of several fields", async () => {
-        const refIds = [0, 1, 2, 3, 4].map(_ => getId());
+        const refIds = [0, 1, 2, 3].map(_ => getId());
         const data = {
           objects: {
             field1: [
@@ -1249,19 +1055,7 @@ describe("Scripting", function () {
                 value: "",
                 actions: {
                   Calculate: [
-                    `AFSimple_Calculate("SUM", ["field1", "field2", "field3", "unknown"]);`,
-                  ],
-                },
-                type: "text",
-              },
-            ],
-            field5: [
-              {
-                id: refIds[4],
-                value: "",
-                actions: {
-                  Calculate: [
-                    `AFSimple_Calculate("SUM", "field1, field2, field3, unknown");`,
+                    `AFSimple_Calculate("SUM", ["field1", "field2", "field3"]);`,
                   ],
                 },
                 type: "text",
@@ -1269,7 +1063,7 @@ describe("Scripting", function () {
             ],
           },
           appInfo: { language: "en-US", platform: "Linux x86_64" },
-          calculationOrder: [refIds[3], refIds[4]],
+          calculationOrder: [refIds[3]],
           dispatchEventName: "_dispatchMe",
         };
 
@@ -1283,7 +1077,6 @@ describe("Scripting", function () {
         expect(send_queue.has(refIds[3])).toEqual(true);
         expect(send_queue.get(refIds[3])).toEqual({
           id: refIds[3],
-          siblings: null,
           value: 1,
           formattedValue: null,
         });
@@ -1297,7 +1090,6 @@ describe("Scripting", function () {
         expect(send_queue.has(refIds[3])).toEqual(true);
         expect(send_queue.get(refIds[3])).toEqual({
           id: refIds[3],
-          siblings: null,
           value: 3,
           formattedValue: null,
         });
@@ -1311,210 +1103,7 @@ describe("Scripting", function () {
         expect(send_queue.has(refIds[3])).toEqual(true);
         expect(send_queue.get(refIds[3])).toEqual({
           id: refIds[3],
-          siblings: null,
           value: 6,
-          formattedValue: null,
-        });
-
-        expect(send_queue.has(refIds[4])).toEqual(true);
-        expect(send_queue.get(refIds[4])).toEqual({
-          id: refIds[4],
-          siblings: null,
-          value: 6,
-          formattedValue: null,
-        });
-      });
-
-      it("should compute the sum of several fields in fields tree", async () => {
-        const refIds = [0, 1, 2, 3, 4, 5].map(_ => getId());
-        const data = {
-          objects: {
-            field1: [
-              {
-                id: refIds[0],
-                kidIds: [refIds[1], refIds[2]],
-              },
-            ],
-            "field1.field2": [
-              {
-                id: refIds[1],
-                kidIds: [refIds[3]],
-              },
-            ],
-            "field1.field3": [
-              {
-                id: refIds[2],
-                value: "",
-                actions: {},
-                type: "text",
-              },
-            ],
-            "field1.field2.field4": [
-              {
-                id: refIds[3],
-                kidIds: [refIds[4]],
-              },
-            ],
-            "field1.field2.field4.field5": [
-              {
-                id: refIds[4],
-                value: "",
-                actions: {},
-                type: "text",
-              },
-            ],
-            field6: [
-              {
-                id: refIds[5],
-                value: "",
-                actions: {
-                  Calculate: [`AFSimple_Calculate("SUM", "field1");`],
-                },
-                type: "text",
-              },
-            ],
-          },
-          appInfo: { language: "en-US", platform: "Linux x86_64" },
-          calculationOrder: [refIds[5]],
-          dispatchEventName: "_dispatchMe",
-        };
-
-        sandbox.createSandbox(data);
-        await sandbox.dispatchEventInSandbox({
-          id: refIds[2],
-          value: "123",
-          name: "Keystroke",
-          willCommit: true,
-        });
-        expect(send_queue.has(refIds[5])).toEqual(true);
-        expect(send_queue.get(refIds[5])).toEqual({
-          id: refIds[5],
-          siblings: null,
-          value: 123,
-          formattedValue: null,
-        });
-
-        await sandbox.dispatchEventInSandbox({
-          id: refIds[4],
-          value: "456",
-          name: "Keystroke",
-          willCommit: true,
-        });
-        expect(send_queue.has(refIds[5])).toEqual(true);
-        expect(send_queue.get(refIds[5])).toEqual({
-          id: refIds[5],
-          siblings: null,
-          value: 579,
-          formattedValue: null,
-        });
-      });
-
-      it("should compute the max of several fields", async () => {
-        const refIds = [0, 1, 2, 3, 4].map(_ => getId());
-        const data = {
-          objects: {
-            field1: [
-              {
-                id: refIds[0],
-                value: "",
-                actions: {},
-                type: "text",
-              },
-            ],
-            field2: [
-              {
-                id: refIds[1],
-                value: "",
-                actions: {},
-                type: "text",
-              },
-            ],
-            field3: [
-              {
-                id: refIds[2],
-                value: "",
-                actions: {},
-                type: "text",
-              },
-            ],
-            field4: [
-              {
-                id: refIds[3],
-                value: "",
-                actions: {
-                  Calculate: [
-                    `AFSimple_Calculate("MAX", ["field1", "field2", "field3", "unknown"]);`,
-                  ],
-                },
-                type: "text",
-              },
-            ],
-            field5: [
-              {
-                id: refIds[4],
-                value: "",
-                actions: {
-                  Calculate: [
-                    `AFSimple_Calculate("MAX", "field1, field2, field3, unknown");`,
-                  ],
-                },
-                type: "text",
-              },
-            ],
-          },
-          appInfo: { language: "en-US", platform: "Linux x86_64" },
-          calculationOrder: [refIds[3], refIds[4]],
-          dispatchEventName: "_dispatchMe",
-        };
-
-        sandbox.createSandbox(data);
-        await sandbox.dispatchEventInSandbox({
-          id: refIds[0],
-          value: "1",
-          name: "Keystroke",
-          willCommit: true,
-        });
-        expect(send_queue.has(refIds[3])).toEqual(true);
-        expect(send_queue.get(refIds[3])).toEqual({
-          id: refIds[3],
-          siblings: null,
-          value: 1,
-          formattedValue: null,
-        });
-
-        await sandbox.dispatchEventInSandbox({
-          id: refIds[1],
-          value: "2",
-          name: "Keystroke",
-          willCommit: true,
-        });
-        expect(send_queue.has(refIds[3])).toEqual(true);
-        expect(send_queue.get(refIds[3])).toEqual({
-          id: refIds[3],
-          siblings: null,
-          value: 2,
-          formattedValue: null,
-        });
-
-        await sandbox.dispatchEventInSandbox({
-          id: refIds[2],
-          value: "3",
-          name: "Keystroke",
-          willCommit: true,
-        });
-        expect(send_queue.has(refIds[3])).toEqual(true);
-        expect(send_queue.get(refIds[3])).toEqual({
-          id: refIds[3],
-          siblings: null,
-          value: 3,
-          formattedValue: null,
-        });
-
-        expect(send_queue.has(refIds[4])).toEqual(true);
-        expect(send_queue.get(refIds[4])).toEqual({
-          id: refIds[4],
-          siblings: null,
-          value: 3,
           formattedValue: null,
         });
       });
@@ -1589,7 +1178,6 @@ describe("Scripting", function () {
         expect(send_queue.has(refId)).toEqual(true);
         expect(send_queue.get(refId)).toEqual({
           id: refId,
-          siblings: null,
           value: "3F?",
           selRange: [3, 3],
         });
@@ -1618,7 +1206,6 @@ describe("Scripting", function () {
         expect(send_queue.has(refId)).toEqual(true);
         expect(send_queue.get(refId)).toEqual({
           id: refId,
-          siblings: null,
           value: "3F?0",
           formattedValue: null,
         });
@@ -1679,7 +1266,6 @@ describe("Scripting", function () {
         expect(send_queue.has(refId)).toEqual(true);
         expect(send_queue.get(refId)).toEqual({
           id: refId,
-          siblings: null,
           value,
           selRange: [i, i],
         });
@@ -1740,129 +1326,6 @@ describe("Scripting", function () {
         expect(send_queue.has(refId)).toEqual(true);
         expect(send_queue.get(refId)).toEqual({
           id: refId,
-          siblings: null,
-          value,
-          selRange: [i, i],
-        });
-
-        send_queue.delete(refId);
-      });
-
-      it("should validate a US phone number with digits only (long) on a keystroke event", async () => {
-        const refId = getId();
-        const data = {
-          objects: {
-            field: [
-              {
-                id: refId,
-                value: "",
-                actions: {
-                  Keystroke: [`AFSpecial_Keystroke(2);`],
-                },
-                type: "text",
-              },
-            ],
-          },
-          appInfo: { language: "en-US", platform: "Linux x86_64" },
-          calculationOrder: [],
-          dispatchEventName: "_dispatchMe",
-        };
-        sandbox.createSandbox(data);
-
-        let value = "";
-        const changes = "1234567890";
-        let i = 0;
-
-        for (; i < changes.length; i++) {
-          const change = changes.charAt(i);
-          await sandbox.dispatchEventInSandbox({
-            id: refId,
-            value,
-            change,
-            name: "Keystroke",
-            willCommit: false,
-            selStart: i,
-            selEnd: i,
-          });
-          expect(send_queue.has(refId)).toEqual(true);
-          send_queue.delete(refId);
-          value += change;
-        }
-
-        await sandbox.dispatchEventInSandbox({
-          id: refId,
-          value,
-          change: "A",
-          name: "Keystroke",
-          willCommit: false,
-          selStart: i,
-          selEnd: i,
-        });
-        expect(send_queue.has(refId)).toEqual(true);
-        expect(send_queue.get(refId)).toEqual({
-          id: refId,
-          siblings: null,
-          value,
-          selRange: [i, i],
-        });
-
-        send_queue.delete(refId);
-      });
-
-      it("should validate a US phone number with digits and dashes (long) on a keystroke event", async () => {
-        const refId = getId();
-        const data = {
-          objects: {
-            field: [
-              {
-                id: refId,
-                value: "",
-                actions: {
-                  Keystroke: [`AFSpecial_Keystroke(2);`],
-                },
-                type: "text",
-              },
-            ],
-          },
-          appInfo: { language: "en-US", platform: "Linux x86_64" },
-          calculationOrder: [],
-          dispatchEventName: "_dispatchMe",
-        };
-        sandbox.createSandbox(data);
-
-        let value = "";
-        const changes = "123-456-7890";
-        let i = 0;
-
-        for (; i < changes.length; i++) {
-          const change = changes.charAt(i);
-          await sandbox.dispatchEventInSandbox({
-            id: refId,
-            value,
-            change,
-            name: "Keystroke",
-            willCommit: false,
-            selStart: i,
-            selEnd: i,
-          });
-          expect(send_queue.has(refId)).toEqual(true);
-          send_queue.delete(refId);
-          value += change;
-        }
-
-        await sandbox.dispatchEventInSandbox({
-          id: refId,
-          value,
-          change: "A",
-          name: "Keystroke",
-          willCommit: false,
-          selStart: i,
-          selEnd: i,
-        });
-        expect(send_queue.has(refId)).toEqual(true);
-        expect(send_queue.get(refId)).toEqual({
-          id: refId,
-          siblings: null,
           value,
           selRange: [i, i],
         });
@@ -1923,68 +1386,6 @@ describe("Scripting", function () {
         expect(send_queue.has(refId)).toEqual(true);
         expect(send_queue.get(refId)).toEqual({
           id: refId,
-          siblings: null,
-          value,
-          selRange: [i, i],
-        });
-
-        send_queue.delete(refId);
-      });
-
-      it("should validate a US phone number with digits only (short) on a keystroke event", async () => {
-        const refId = getId();
-        const data = {
-          objects: {
-            field: [
-              {
-                id: refId,
-                value: "",
-                actions: {
-                  Keystroke: [`AFSpecial_Keystroke(2);`],
-                },
-                type: "text",
-              },
-            ],
-          },
-          appInfo: { language: "en-US", platform: "Linux x86_64" },
-          calculationOrder: [],
-          dispatchEventName: "_dispatchMe",
-        };
-        sandbox.createSandbox(data);
-
-        let value = "";
-        const changes = "1234567";
-        let i = 0;
-
-        for (; i < changes.length; i++) {
-          const change = changes.charAt(i);
-          await sandbox.dispatchEventInSandbox({
-            id: refId,
-            value,
-            change,
-            name: "Keystroke",
-            willCommit: false,
-            selStart: i,
-            selEnd: i,
-          });
-          expect(send_queue.has(refId)).toEqual(true);
-          send_queue.delete(refId);
-          value += change;
-        }
-
-        await sandbox.dispatchEventInSandbox({
-          id: refId,
-          value,
-          change: "A",
-          name: "Keystroke",
-          willCommit: false,
-          selStart: i,
-          selEnd: i,
-        });
-        expect(send_queue.has(refId)).toEqual(true);
-        expect(send_queue.get(refId)).toEqual({
-          id: refId,
-          siblings: null,
           value,
           selRange: [i, i],
         });
@@ -2003,22 +1404,6 @@ describe("Scripting", function () {
 
         value = await myeval(`eMailValidate("foo bar")`);
         expect(value).toEqual(false);
-      });
-    });
-
-    describe("AFExactMatch", function () {
-      it("should check matching between regexs and a string", async () => {
-        let value = await myeval(`AFExactMatch(/\\d+/, "123")`);
-        expect(value).toEqual(true);
-
-        value = await myeval(`AFExactMatch(/\\d+/, "foo")`);
-        expect(value).toEqual(0);
-
-        value = await myeval(`AFExactMatch([/\\d+/, /[fo]*/], "foo")`);
-        expect(value).toEqual(2);
-
-        value = await myeval(`AFExactMatch([/\\d+/, /[fo]*/], "bar")`);
-        expect(value).toEqual(0);
       });
     });
   });

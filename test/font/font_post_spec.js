@@ -24,22 +24,17 @@ describe("font_post", function () {
       const cMap = await CMapFactory.create({
         encoding: Name.get("Identity-H"),
       });
-      const font = new Font(
-        "font",
-        new Stream(font2109),
-        {
-          loadedName: "font",
-          type: "CIDFontType2",
-          differences: [],
-          defaultEncoding: [],
-          cMap,
-          toUnicode: new ToUnicodeMap([]),
-          xHeight: 0,
-          capHeight: 0,
-          italicAngle: 0,
-        },
-        {}
-      );
+      const font = new Font("font", new Stream(font2109), {
+        loadedName: "font",
+        type: "CIDFontType2",
+        differences: [],
+        defaultEncoding: [],
+        cMap,
+        toUnicode: new ToUnicodeMap([]),
+        xHeight: 0,
+        capHeight: 0,
+        italicAngle: 0,
+      });
       const output = await ttx(font.data);
 
       verifyTtxOutput(output);
@@ -47,21 +42,16 @@ describe("font_post", function () {
     });
 
     it("has invalid glyph name indexes", async function () {
-      const font = new Font(
-        "font",
-        new Stream(font2189),
-        {
-          loadedName: "font",
-          type: "TrueType",
-          differences: [],
-          defaultEncoding: [],
-          toUnicode: new ToUnicodeMap([]),
-          xHeight: 0,
-          capHeight: 0,
-          italicAngle: 0,
-        },
-        {}
-      );
+      const font = new Font("font", new Stream(font2189), {
+        loadedName: "font",
+        type: "TrueType",
+        differences: [],
+        defaultEncoding: [],
+        toUnicode: new ToUnicodeMap([]),
+        xHeight: 0,
+        capHeight: 0,
+        italicAngle: 0,
+      });
       const output = await ttx(font.data);
 
       verifyTtxOutput(output);
@@ -69,21 +59,16 @@ describe("font_post", function () {
     });
 
     it("has right amount of glyphs specified", async function () {
-      const font = new Font(
-        "font",
-        new Stream(font2374),
-        {
-          loadedName: "font",
-          type: "TrueType",
-          differences: [],
-          defaultEncoding: [],
-          toUnicode: new ToUnicodeMap([]),
-          xHeight: 0,
-          capHeight: 0,
-          italicAngle: 0,
-        },
-        {}
-      );
+      const font = new Font("font", new Stream(font2374), {
+        loadedName: "font",
+        type: "TrueType",
+        differences: [],
+        defaultEncoding: [],
+        toUnicode: new ToUnicodeMap([]),
+        xHeight: 0,
+        capHeight: 0,
+        italicAngle: 0,
+      });
       const output = await ttx(font.data);
 
       verifyTtxOutput(output);

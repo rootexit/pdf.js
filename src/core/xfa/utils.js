@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-import { MathClamp, shadow } from "../../shared/util.js";
+import { shadow } from "../../shared/util.js";
 
 const dimConverters = {
   pt: x => x,
@@ -26,7 +26,7 @@ const measurementPattern = /([+-]?\d+\.?\d*)(.*)/;
 
 function stripQuotes(str) {
   if (str.startsWith("'") || str.startsWith('"')) {
-    return str.slice(1, -1);
+    return str.slice(1, str.length - 1);
   }
   return str;
 }
@@ -75,7 +75,7 @@ function getStringOption(data, options) {
 }
 
 function getMeasurement(str, def = "0") {
-  def ||= "0";
+  def = def || "0";
   if (!str) {
     return getMeasurement(def);
   }
@@ -106,8 +106,9 @@ function getRatio(data) {
     return { num: 1, den: 1 };
   }
   const ratio = data
-    .split(":", 2)
-    .map(x => parseFloat(x.trim()))
+    .trim()
+    .split(/\s*:\s*/)
+    .map(x => parseFloat(x))
     .filter(x => !isNaN(x));
   if (ratio.length === 1) {
     ratio.push(1);
@@ -128,10 +129,12 @@ function getRelevant(data) {
   return data
     .trim()
     .split(/\s+/)
-    .map(e => ({
-      excluded: e[0] === "-",
-      viewname: e.substring(1),
-    }));
+    .map(e => {
+      return {
+        excluded: e[0] === "-",
+        viewname: e.substring(1),
+      };
+    });
 }
 
 function getColor(data, def = [0, 0, 0]) {
@@ -140,8 +143,9 @@ function getColor(data, def = [0, 0, 0]) {
     return { r, g, b };
   }
   const color = data
-    .split(",", 3)
-    .map(c => MathClamp(parseInt(c.trim(), 10), 0, 255))
+    .trim()
+    .split(/\s*,\s*/)
+    .map(c => Math.min(Math.max(0, parseInt(c.trim(), 10)), 255))
     .map(c => (isNaN(c) ? 0 : c));
 
   if (color.length < 3) {
@@ -157,8 +161,10 @@ function getBBox(data) {
   if (!data) {
     return { x: def, y: def, width: def, height: def };
   }
-  const bbox = data.split(",", 4).map(m => getMeasurement(m.trim(), "-1"));
-
+  const bbox = data
+    .trim()
+    .split(/\s*,\s*/)
+    .map(m => getMeasurement(m, "-1"));
   if (bbox.length < 4 || bbox[2] < 0 || bbox[3] < 0) {
     return { x: def, y: def, width: def, height: def };
   }

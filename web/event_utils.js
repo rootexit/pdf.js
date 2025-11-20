@@ -35,32 +35,39 @@ const WaitOnType = {
  * @param {WaitOnEventOrTimeoutParameters}
  * @returns {Promise} A promise that is resolved with a {WaitOnType} value.
  */
-async function waitOnEventOrTimeout({ target, name, delay = 0 }) {
-  if (
-    typeof target !== "object" ||
-    !(name && typeof name === "string") ||
-    !(Number.isInteger(delay) && delay >= 0)
-  ) {
-    throw new Error("waitOnEventOrTimeout - invalid parameters.");
-  }
-  const { promise, resolve } = Promise.withResolvers();
-  const ac = new AbortController();
+function waitOnEventOrTimeout({ target, name, delay = 0 }) {
+  return new Promise(function (resolve, reject) {
+    if (
+      typeof target !== "object" ||
+      !(name && typeof name === "string") ||
+      !(Number.isInteger(delay) && delay >= 0)
+    ) {
+      throw new Error("waitOnEventOrTimeout - invalid parameters.");
+    }
 
-  function handler(type) {
-    ac.abort(); // Remove event listener.
-    clearTimeout(timeout);
+    function handler(type) {
+      if (target instanceof EventBus) {
+        target._off(name, eventHandler);
+      } else {
+        target.removeEventListener(name, eventHandler);
+      }
 
-    resolve(type);
-  }
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      resolve(type);
+    }
 
-  const evtMethod = target instanceof EventBus ? "_on" : "addEventListener";
-  target[evtMethod](name, handler.bind(null, WaitOnType.EVENT), {
-    signal: ac.signal,
+    const eventHandler = handler.bind(null, WaitOnType.EVENT);
+    if (target instanceof EventBus) {
+      target._on(name, eventHandler);
+    } else {
+      target.addEventListener(name, eventHandler);
+    }
+
+    const timeoutHandler = handler.bind(null, WaitOnType.TIMEOUT);
+    const timeout = setTimeout(timeoutHandler, delay);
   });
-
-  const timeout = setTimeout(handler.bind(null, WaitOnType.TIMEOUT), delay);
-
-  return promise;
 }
 
 /**
@@ -68,7 +75,9 @@ async function waitOnEventOrTimeout({ target, name, delay = 0 }) {
  * and `off` methods. To raise an event, the `dispatch` method shall be used.
  */
 class EventBus {
-  #listeners = Object.create(null);
+  constructor() {
+    this._listeners = Object.create(null);
+  }
 
   /**
    * @param {string} eventName
@@ -79,7 +88,6 @@ class EventBus {
     this._on(eventName, listener, {
       external: true,
       once: options?.once,
-      signal: options?.signal,
     });
   }
 
@@ -89,7 +97,10 @@ class EventBus {
    * @param {Object} [options]
    */
   off(eventName, listener, options = null) {
-    this._off(eventName, listener);
+    this._off(eventName, listener, {
+      external: true,
+      once: options?.once,
+    });
   }
 
   /**
@@ -97,7 +108,7 @@ class EventBus {
    * @param {Object} data
    */
   dispatch(eventName, data) {
-    const eventListeners = this.#listeners[eventName];
+    const eventListeners = this._listeners[eventName];
     if (!eventListeners || eventListeners.length === 0) {
       return;
     }
@@ -128,25 +139,11 @@ class EventBus {
    * @ignore
    */
   _on(eventName, listener, options = null) {
-    let rmAbort = null;
-    if (options?.signal instanceof AbortSignal) {
-      const { signal } = options;
-      if (signal.aborted) {
-        console.error("Cannot use an `aborted` signal.");
-        return;
-      }
-      const onAbort = () => this._off(eventName, listener);
-      rmAbort = () => signal.removeEventListener("abort", onAbort);
-
-      signal.addEventListener("abort", onAbort);
-    }
-
-    const eventListeners = (this.#listeners[eventName] ||= []);
+    const eventListeners = (this._listeners[eventName] ||= []);
     eventListeners.push({
       listener,
       external: options?.external === true,
       once: options?.once === true,
-      rmAbort,
     });
   }
 
@@ -154,14 +151,12 @@ class EventBus {
    * @ignore
    */
   _off(eventName, listener, options = null) {
-    const eventListeners = this.#listeners[eventName];
+    const eventListeners = this._listeners[eventName];
     if (!eventListeners) {
       return;
     }
     for (let i = 0, ii = eventListeners.length; i < ii; i++) {
-      const evt = eventListeners[i];
-      if (evt.listener === listener) {
-        evt.rmAbort?.(); // Ensure that the `AbortSignal` listener is removed.
+      if (eventListeners[i].listener === listener) {
         eventListeners.splice(i, 1);
         return;
       }
@@ -170,57 +165,32 @@ class EventBus {
 }
 
 /**
- * NOTE: Only used in the Firefox built-in pdf viewer.
+ * NOTE: Only used to support various PDF viewer tests in `mozilla-central`.
  */
-class FirefoxEventBus extends EventBus {
-  #externalServices;
-
-  #globalEventNames;
-
-  #isInAutomation;
-
-  constructor(globalEventNames, externalServices, isInAutomation) {
-    super();
-    this.#globalEventNames = globalEventNames;
-    this.#externalServices = externalServices;
-    this.#isInAutomation = isInAutomation;
-  }
-
+class AutomationEventBus extends EventBus {
   dispatch(eventName, data) {
     if (typeof PDFJSDev !== "undefined" && !PDFJSDev.test("MOZCENTRAL")) {
-      throw new Error("Not implemented: FirefoxEventBus.dispatch");
+      throw new Error("Not implemented: AutomationEventBus.dispatch");
     }
     super.dispatch(eventName, data);
 
-    if (this.#isInAutomation) {
-      const detail = Object.create(null);
-      if (data) {
-        for (const key in data) {
-          const value = data[key];
-          if (key === "source") {
-            if (value === window || value === document) {
-              return; // No need to re-dispatch (already) global events.
-            }
-            continue; // Ignore the `source` property.
+    const details = Object.create(null);
+    if (data) {
+      for (const key in data) {
+        const value = data[key];
+        if (key === "source") {
+          if (value === window || value === document) {
+            return; // No need to re-dispatch (already) global events.
           }
-          detail[key] = value;
+          continue; // Ignore the `source` property.
         }
+        details[key] = value;
       }
-      const event = new CustomEvent(eventName, {
-        bubbles: true,
-        cancelable: true,
-        detail,
-      });
-      document.dispatchEvent(event);
     }
-
-    if (this.#globalEventNames?.has(eventName)) {
-      this.#externalServices.dispatchGlobalEvent({
-        eventName,
-        detail: data,
-      });
-    }
+    const event = document.createEvent("CustomEvent");
+    event.initCustomEvent(eventName, true, true, details);
+    document.dispatchEvent(event);
   }
 }
 
-export { EventBus, FirefoxEventBus, waitOnEventOrTimeout, WaitOnType };
+export { AutomationEventBus, EventBus, waitOnEventOrTimeout, WaitOnType };

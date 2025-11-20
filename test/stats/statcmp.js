@@ -1,9 +1,6 @@
-/* eslint-disable import/no-commonjs */
+"use strict";
 
-import { createRequire } from "module";
-import fs from "fs";
-
-const require = createRequire(import.meta.url);
+const fs = require("fs");
 const ttest = require("ttest");
 
 const VALID_GROUP_BYS = ["browser", "pdf", "page", "round", "stat"];
@@ -33,13 +30,17 @@ function parseOptions() {
 
 function group(stats, groupBy) {
   const vals = [];
-  for (const curStat of stats) {
+  for (let i = 0; i < stats.length; i++) {
+    const curStat = stats[i];
     const keyArr = [];
-    for (const entry of groupBy) {
-      keyArr.push(curStat[entry]);
+    for (let j = 0; j < groupBy.length; j++) {
+      keyArr.push(curStat[groupBy[j]]);
     }
     const key = keyArr.join(",");
-    (vals[key] ||= []).push(curStat.time);
+    if (vals[key] === undefined) {
+      vals[key] = [];
+    }
+    vals[key].push(curStat.time);
   }
   return vals;
 }
@@ -64,7 +65,9 @@ function flatten(stats) {
   });
   // Use only overall results if not grouped by 'stat'
   if (!options.groupBy.includes("stat")) {
-    rows = rows.filter(s => s.stat === "Overall");
+    rows = rows.filter(function (s) {
+      return s.stat === "Overall";
+    });
   }
   return rows;
 }
@@ -76,7 +79,10 @@ function pad(s, length, dir /* default: 'right' */) {
 }
 
 function mean(array) {
-  return array.reduce((a, b) => a + b, 0) / array.length;
+  function add(a, b) {
+    return a + b;
+  }
+  return array.reduce(add, 0) / array.length;
 }
 
 /* Comparator for row key sorting. */
@@ -124,9 +130,12 @@ function stat(baseline, current) {
   }
   const rows = [];
   // collect rows and measure column widths
-  const width = labels.map(s => s.length);
+  const width = labels.map(function (s) {
+    return s.length;
+  });
   rows.push(labels);
-  for (const key of keys) {
+  for (let k = 0; k < keys.length; k++) {
+    const key = keys[k];
     const baselineMean = mean(baselineGroup[key]);
     const currentMean = mean(currentGroup[key]);
     const row = key.split(",");
@@ -155,13 +164,16 @@ function stat(baseline, current) {
   }
 
   // add horizontal line
-  const hline = width.map(w => new Array(w + 1).join("-"));
+  const hline = width.map(function (w) {
+    return new Array(w + 1).join("-");
+  });
   rows.splice(1, 0, hline);
 
   // print output
   console.log("-- Grouped By " + options.groupBy.join(", ") + " --");
   const groupCount = options.groupBy.length;
-  for (const row of rows) {
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
     for (let i = 0; i < row.length; i++) {
       row[i] = pad(row[i], width[i], i < groupCount ? "right" : "left");
     }

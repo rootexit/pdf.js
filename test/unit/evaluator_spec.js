@@ -74,8 +74,8 @@ describe("evaluator", function () {
       );
       expect(!!result.fnArray && !!result.argsArray).toEqual(true);
       expect(result.fnArray.length).toEqual(1);
-      expect(result.fnArray[0]).toEqual(OPS.constructPath);
-      expect(result.argsArray[0]).toEqual([OPS.fill, [null], null]);
+      expect(result.fnArray[0]).toEqual(OPS.fill);
+      expect(result.argsArray[0]).toEqual(null);
     });
 
     it("should handle one operation", async function () {
@@ -130,14 +130,9 @@ describe("evaluator", function () {
       );
       expect(!!result.fnArray && !!result.argsArray).toEqual(true);
       expect(result.fnArray.length).toEqual(3);
-      expect(result.fnArray).toEqual([
-        OPS.constructPath,
-        OPS.constructPath,
-        OPS.constructPath,
-      ]);
-      expect(result.argsArray[0][0]).toEqual(OPS.fill);
-      expect(result.argsArray[1][0]).toEqual(OPS.fill);
-      expect(result.argsArray[2][0]).toEqual(OPS.fill);
+      expect(result.fnArray[0]).toEqual(OPS.fill);
+      expect(result.fnArray[1]).toEqual(OPS.fill);
+      expect(result.fnArray[2]).toEqual(OPS.fill);
     });
 
     it("should handle three glued operations #2", async function () {
@@ -150,14 +145,10 @@ describe("evaluator", function () {
         resources
       );
       expect(!!result.fnArray && !!result.argsArray).toEqual(true);
-      expect(result.fnArray).toEqual([
-        OPS.constructPath,
-        OPS.constructPath,
-        OPS.constructPath,
-      ]);
-      expect(result.argsArray[0][0]).toEqual(OPS.eoFillStroke);
-      expect(result.argsArray[1][0]).toEqual(OPS.fillStroke);
-      expect(result.argsArray[2][0]).toEqual(OPS.eoFill);
+      expect(result.fnArray.length).toEqual(3);
+      expect(result.fnArray[0]).toEqual(OPS.eoFillStroke);
+      expect(result.fnArray[1]).toEqual(OPS.fillStroke);
+      expect(result.fnArray[2]).toEqual(OPS.eoFill);
     });
 
     it("should handle glued operations and operands", async function () {
@@ -169,7 +160,7 @@ describe("evaluator", function () {
       );
       expect(!!result.fnArray && !!result.argsArray).toEqual(true);
       expect(result.fnArray.length).toEqual(2);
-      expect(result.fnArray[0]).toEqual(OPS.constructPath);
+      expect(result.fnArray[0]).toEqual(OPS.fill);
       expect(result.fnArray[1]).toEqual(OPS.setTextRise);
       expect(result.argsArray.length).toEqual(2);
       expect(result.argsArray[1].length).toEqual(1);
@@ -187,13 +178,13 @@ describe("evaluator", function () {
       expect(result.fnArray.length).toEqual(3);
       expect(result.fnArray[0]).toEqual(OPS.setFlatness);
       expect(result.fnArray[1]).toEqual(OPS.setRenderingIntent);
-      expect(result.fnArray[2]).toEqual(OPS.constructPath);
+      expect(result.fnArray[2]).toEqual(OPS.endPath);
       expect(result.argsArray.length).toEqual(3);
       expect(result.argsArray[0].length).toEqual(1);
       expect(result.argsArray[0][0]).toEqual(true);
       expect(result.argsArray[1].length).toEqual(1);
       expect(result.argsArray[1][0]).toEqual(false);
-      expect(result.argsArray[2]).toEqual([OPS.endPath, [null], null]);
+      expect(result.argsArray[2]).toEqual(null);
     });
   });
 
@@ -357,18 +348,6 @@ describe("evaluator", function () {
       expect(result.argsArray).toEqual([]);
       expect(result.fnArray).toEqual([]);
     });
-
-    it("should handle invalid dash stuff", async function () {
-      const stream = new StringStream("[ none ] 0 d");
-      const result = await runOperatorListCheck(
-        partialEvaluator,
-        stream,
-        new ResourcesMock()
-      );
-      expect(result.argsArray[0][0]).toEqual([]);
-      expect(result.argsArray[0][1]).toEqual(0);
-      expect(result.fnArray[0]).toEqual(OPS.setDash);
-    });
   });
 
   describe("thread control", function () {
@@ -389,7 +368,7 @@ describe("evaluator", function () {
 
         // Shouldn't get here.
         expect(false).toEqual(true);
-      } catch {
+      } catch (_) {
         expect(!!result.fnArray && !!result.argsArray).toEqual(true);
         expect(result.fnArray.length).toEqual(0);
       }
@@ -410,7 +389,7 @@ describe("evaluator", function () {
 
         // Shouldn't get here.
         expect(false).toEqual(true);
-      } catch {
+      } catch (_) {
         expect(true).toEqual(true);
       }
     });
@@ -433,32 +412,6 @@ describe("evaluator", function () {
 
       expect(operatorList.totalLength).toEqual(2);
       expect(operatorList.length).toEqual(0);
-    });
-  });
-
-  describe("graphics-state operators", function () {
-    it("should convert negative line width to absolute value in the graphic state", async function () {
-      const gState = new Dict();
-      gState.set("LW", -5);
-      const extGState = new Dict();
-      extGState.set("GSneg", gState);
-
-      const resources = new ResourcesMock();
-      resources.ExtGState = extGState;
-
-      const stream = new StringStream("/GSneg gs");
-      const result = await runOperatorListCheck(
-        partialEvaluator,
-        stream,
-        resources
-      );
-
-      expect(result.fnArray).toEqual([OPS.setGState]);
-
-      const stateEntries = result.argsArray[0][0];
-      const lwEntry = stateEntries.find(([key]) => key === "LW");
-      expect(lwEntry).toBeDefined();
-      expect(lwEntry[1]).toEqual(5);
     });
   });
 });

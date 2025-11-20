@@ -13,28 +13,21 @@
  * limitations under the License.
  */
 
-/** @typedef {import("./event_utils.js").EventBus} EventBus */
-// eslint-disable-next-line max-len
-/** @typedef {import("./download_manager.js").DownloadManager} DownloadManager */
-/** @typedef {import("./interfaces.js").IPDFLinkService} IPDFLinkService */
-// eslint-disable-next-line max-len
-/** @typedef {import("../src/display/api.js").PDFDocumentProxy} PDFDocumentProxy */
-
 import { BaseTreeViewer } from "./base_tree_viewer.js";
+import { createPromiseCapability } from "pdfjs-lib";
 import { SidebarView } from "./ui_utils.js";
 
 /**
  * @typedef {Object} PDFOutlineViewerOptions
  * @property {HTMLDivElement} container - The viewer element.
- * @property {EventBus} eventBus - The application event bus.
  * @property {IPDFLinkService} linkService - The navigation/linking service.
- * @property {DownloadManager} downloadManager - The download manager.
+ * @property {EventBus} eventBus - The application event bus.
  */
 
 /**
  * @typedef {Object} PDFOutlineViewerRenderParameters
  * @property {Array|null} outline - An array of outline objects.
- * @property {PDFDocumentProxy} pdfDocument - A {PDFDocument} instance.
+ * @property {PDFDocument} pdfDocument - A {PDFDocument} instance.
  */
 
 class PDFOutlineViewer extends BaseTreeViewer {
@@ -44,7 +37,6 @@ class PDFOutlineViewer extends BaseTreeViewer {
   constructor(options) {
     super(options);
     this.linkService = options.linkService;
-    this.downloadManager = options.downloadManager;
 
     this.eventBus._on("toggleoutlinetree", this._toggleAllTreeItems.bind(this));
     this.eventBus._on(
@@ -60,9 +52,14 @@ class PDFOutlineViewer extends BaseTreeViewer {
 
       // If the capability is still pending, see the `_dispatchEvent`-method,
       // we know that the `currentOutlineItem`-button can be enabled here.
-      this._currentOutlineItemCapability?.resolve(
-        /* enabled = */ this._isPagesLoaded
-      );
+      if (
+        this._currentOutlineItemCapability &&
+        !this._currentOutlineItemCapability.settled
+      ) {
+        this._currentOutlineItemCapability.resolve(
+          /* enabled = */ this._isPagesLoaded
+        );
+      }
     });
     this.eventBus._on("sidebarviewchanged", evt => {
       this._sidebarView = evt.view;
@@ -77,15 +74,20 @@ class PDFOutlineViewer extends BaseTreeViewer {
     this._currentPageNumber = 1;
     this._isPagesLoaded = null;
 
-    this._currentOutlineItemCapability?.resolve(/* enabled = */ false);
+    if (
+      this._currentOutlineItemCapability &&
+      !this._currentOutlineItemCapability.settled
+    ) {
+      this._currentOutlineItemCapability.resolve(/* enabled = */ false);
+    }
     this._currentOutlineItemCapability = null;
   }
 
   /**
-   * @protected
+   * @private
    */
   _dispatchEvent(outlineCount) {
-    this._currentOutlineItemCapability = Promise.withResolvers();
+    this._currentOutlineItemCapability = createPromiseCapability();
     if (
       outlineCount === 0 ||
       this._pdfDocument?.loadingParams.disableAutoFetch
@@ -105,43 +107,13 @@ class PDFOutlineViewer extends BaseTreeViewer {
   }
 
   /**
-   * @protected
+   * @private
    */
-  _bindLink(
-    element,
-    { url, newWindow, action, attachment, dest, setOCGState }
-  ) {
+  _bindLink(element, { url, newWindow, dest }) {
     const { linkService } = this;
 
     if (url) {
       linkService.addLinkAttributes(element, url, newWindow);
-      return;
-    }
-    if (action) {
-      element.href = linkService.getAnchorUrl("");
-      element.onclick = () => {
-        linkService.executeNamedAction(action);
-        return false;
-      };
-      return;
-    }
-    if (attachment) {
-      element.href = linkService.getAnchorUrl("");
-      element.onclick = () => {
-        this.downloadManager.openOrDownloadData(
-          attachment.content,
-          attachment.filename
-        );
-        return false;
-      };
-      return;
-    }
-    if (setOCGState) {
-      element.href = linkService.getAnchorUrl("");
-      element.onclick = () => {
-        linkService.executeSetOCGState(setOCGState);
-        return false;
-      };
       return;
     }
 
@@ -169,7 +141,7 @@ class PDFOutlineViewer extends BaseTreeViewer {
   }
 
   /**
-   * @protected
+   * @private
    */
   _addToggleButton(div, { count, items }) {
     let hidden = false;
@@ -232,7 +204,7 @@ class PDFOutlineViewer extends BaseTreeViewer {
         this._setStyles(element, item);
         element.textContent = this._normalizeTextContent(item.title);
 
-        div.append(element);
+        div.appendChild(element);
 
         if (item.items.length > 0) {
           hasAnyNesting = true;
@@ -240,12 +212,12 @@ class PDFOutlineViewer extends BaseTreeViewer {
 
           const itemsDiv = document.createElement("div");
           itemsDiv.className = "treeItems";
-          div.append(itemsDiv);
+          div.appendChild(itemsDiv);
 
           queue.push({ parent: itemsDiv, items: item.items });
         }
 
-        levelData.parent.append(div);
+        levelData.parent.appendChild(div);
         outlineCount++;
       }
     }
@@ -303,7 +275,7 @@ class PDFOutlineViewer extends BaseTreeViewer {
     if (this._pageNumberToDestHashCapability) {
       return this._pageNumberToDestHashCapability.promise;
     }
-    this._pageNumberToDestHashCapability = Promise.withResolvers();
+    this._pageNumberToDestHashCapability = createPromiseCapability();
 
     const pageNumberToDestHash = new Map(),
       pageNumberNesting = new Map();
@@ -325,10 +297,21 @@ class PDFOutlineViewer extends BaseTreeViewer {
         if (Array.isArray(explicitDest)) {
           const [destRef] = explicitDest;
 
-          if (destRef && typeof destRef === "object") {
-            // The page reference must be available, since the current method
-            // won't be invoked until all pages have been loaded.
-            pageNumber = pdfDocument.cachedPageNumber(destRef);
+          if (typeof destRef === "object" && destRef !== null) {
+            pageNumber = this.linkService._cachedPageNumber(destRef);
+
+            if (!pageNumber) {
+              try {
+                pageNumber = (await pdfDocument.getPageIndex(destRef)) + 1;
+
+                if (pdfDocument !== this._pdfDocument) {
+                  return null; // The document was closed while the data resolved.
+                }
+                this.linkService.cachePageRef(pageNumber, destRef);
+              } catch (ex) {
+                // Invalid page reference, ignore it and continue parsing.
+              }
+            }
           } else if (Number.isInteger(destRef)) {
             pageNumber = destRef + 1;
           }

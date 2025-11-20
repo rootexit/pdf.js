@@ -14,14 +14,12 @@
  */
 
 import {
-  BaseException,
-  DrawOPS,
-  FeatureTest,
-  shadow,
-  Util,
-  warn,
-} from "../shared/util.js";
-import { XfaLayer } from "./xfa_layer.js";
+  BaseCanvasFactory,
+  BaseCMapReaderFactory,
+  BaseStandardFontDataFactory,
+  BaseSVGFactory,
+} from "./base_factory.js";
+import { BaseException, stringToBytes, Util, warn } from "../shared/util.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -33,7 +31,24 @@ class PixelsPerInch {
   static PDF_TO_CSS_UNITS = this.CSS / this.PDF;
 }
 
-async function fetchData(url, type = "text") {
+class DOMCanvasFactory extends BaseCanvasFactory {
+  constructor({ ownerDocument = globalThis.document } = {}) {
+    super();
+    this._document = ownerDocument;
+  }
+
+  /**
+   * @ignore
+   */
+  _createCanvas(width, height) {
+    const canvas = this._document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
+  }
+}
+
+async function fetchData(url, asTypedArray = false) {
   if (
     (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) ||
     isValidFetchUrl(url, document.baseURI)
@@ -42,37 +57,34 @@ async function fetchData(url, type = "text") {
     if (!response.ok) {
       throw new Error(response.statusText);
     }
-    switch (type) {
-      case "arraybuffer":
-        return response.arrayBuffer();
-      case "blob":
-        return response.blob();
-      case "json":
-        return response.json();
-    }
-    return response.text();
+    return asTypedArray
+      ? new Uint8Array(await response.arrayBuffer())
+      : stringToBytes(await response.text());
   }
 
   // The Fetch API is not supported.
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open("GET", url, /* async = */ true);
-    request.responseType = type;
+    request.open("GET", url, /* asTypedArray = */ true);
 
+    if (asTypedArray) {
+      request.responseType = "arraybuffer";
+    }
     request.onreadystatechange = () => {
       if (request.readyState !== XMLHttpRequest.DONE) {
         return;
       }
       if (request.status === 200 || request.status === 0) {
-        switch (type) {
-          case "arraybuffer":
-          case "blob":
-          case "json":
-            resolve(request.response);
-            return;
+        let data;
+        if (asTypedArray && request.response) {
+          data = new Uint8Array(request.response);
+        } else if (!asTypedArray && request.responseText) {
+          data = stringToBytes(request.responseText);
         }
-        resolve(request.responseText);
-        return;
+        if (data) {
+          resolve(data);
+          return;
+        }
       }
       reject(new Error(request.statusText));
     };
@@ -81,11 +93,39 @@ async function fetchData(url, type = "text") {
   });
 }
 
+class DOMCMapReaderFactory extends BaseCMapReaderFactory {
+  /**
+   * @ignore
+   */
+  _fetchData(url, compressionType) {
+    return fetchData(url, /* asTypedArray = */ this.isCompressed).then(data => {
+      return { cMapData: data, compressionType };
+    });
+  }
+}
+
+class DOMStandardFontDataFactory extends BaseStandardFontDataFactory {
+  /**
+   * @ignore
+   */
+  _fetchData(url) {
+    return fetchData(url, /* asTypedArray = */ true);
+  }
+}
+
+class DOMSVGFactory extends BaseSVGFactory {
+  /**
+   * @ignore
+   */
+  _createSVG(type) {
+    return document.createElementNS(SVG_NS, type);
+  }
+}
+
 /**
  * @typedef {Object} PageViewportParameters
  * @property {Array<number>} viewBox - The xMin, yMin, xMax and
  *   yMax coordinates.
- * @property {number} userUnit - The size of units.
  * @property {number} scale - The scale of the viewport.
  * @property {number} rotation - The rotation, in degrees, of the viewport.
  * @property {number} [offsetX] - The horizontal, i.e. x-axis, offset. The
@@ -119,7 +159,6 @@ class PageViewport {
    */
   constructor({
     viewBox,
-    userUnit,
     scale,
     rotation,
     offsetX = 0,
@@ -127,13 +166,10 @@ class PageViewport {
     dontFlip = false,
   }) {
     this.viewBox = viewBox;
-    this.userUnit = userUnit;
     this.scale = scale;
     this.rotation = rotation;
     this.offsetX = offsetX;
     this.offsetY = offsetY;
-
-    scale *= userUnit; // Take the userUnit into account.
 
     // creating transform to convert pdf coordinate system to the normal
     // canvas like coordinates taking in account scale and rotation
@@ -186,13 +222,13 @@ class PageViewport {
     if (rotateA === 0) {
       offsetCanvasX = Math.abs(centerY - viewBox[1]) * scale + offsetX;
       offsetCanvasY = Math.abs(centerX - viewBox[0]) * scale + offsetY;
-      width = (viewBox[3] - viewBox[1]) * scale;
-      height = (viewBox[2] - viewBox[0]) * scale;
+      width = Math.abs(viewBox[3] - viewBox[1]) * scale;
+      height = Math.abs(viewBox[2] - viewBox[0]) * scale;
     } else {
       offsetCanvasX = Math.abs(centerX - viewBox[0]) * scale + offsetX;
       offsetCanvasY = Math.abs(centerY - viewBox[1]) * scale + offsetY;
-      width = (viewBox[2] - viewBox[0]) * scale;
-      height = (viewBox[3] - viewBox[1]) * scale;
+      width = Math.abs(viewBox[2] - viewBox[0]) * scale;
+      height = Math.abs(viewBox[3] - viewBox[1]) * scale;
     }
     // creating transform for the following operations:
     // translate(-centerX, -centerY), rotate and flip vertically,
@@ -211,21 +247,6 @@ class PageViewport {
   }
 
   /**
-   * The original, un-scaled, viewport dimensions.
-   * @type {Object}
-   */
-  get rawDims() {
-    const dims = this.viewBox;
-
-    return shadow(this, "rawDims", {
-      pageWidth: dims[2] - dims[0],
-      pageHeight: dims[3] - dims[1],
-      pageX: dims[0],
-      pageY: dims[1],
-    });
-  }
-
-  /**
    * Clones viewport, with optional additional properties.
    * @param {PageViewportCloneParameters} [params]
    * @returns {PageViewport} Cloned viewport.
@@ -239,7 +260,6 @@ class PageViewport {
   } = {}) {
     return new PageViewport({
       viewBox: this.viewBox.slice(),
-      userUnit: this.userUnit,
       scale,
       rotation,
       offsetX,
@@ -253,15 +273,13 @@ class PageViewport {
    * converting PDF location into canvas pixel coordinates.
    * @param {number} x - The x-coordinate.
    * @param {number} y - The y-coordinate.
-   * @returns {Array} Array containing `x`- and `y`-coordinates of the
+   * @returns {Object} Object containing `x` and `y` properties of the
    *   point in the viewport coordinate space.
    * @see {@link convertToPdfPoint}
    * @see {@link convertToViewportRectangle}
    */
   convertToViewportPoint(x, y) {
-    const p = [x, y];
-    Util.applyTransform(p, this.transform);
-    return p;
+    return Util.applyTransform([x, y], this.transform);
   }
 
   /**
@@ -272,10 +290,8 @@ class PageViewport {
    * @see {@link convertToViewportPoint}
    */
   convertToViewportRectangle(rect) {
-    const topLeft = [rect[0], rect[1]];
-    Util.applyTransform(topLeft, this.transform);
-    const bottomRight = [rect[2], rect[3]];
-    Util.applyTransform(bottomRight, this.transform);
+    const topLeft = Util.applyTransform([rect[0], rect[1]], this.transform);
+    const bottomRight = Util.applyTransform([rect[2], rect[3]], this.transform);
     return [topLeft[0], topLeft[1], bottomRight[0], bottomRight[1]];
   }
 
@@ -284,21 +300,19 @@ class PageViewport {
    * for converting canvas pixel location into PDF one.
    * @param {number} x - The x-coordinate.
    * @param {number} y - The y-coordinate.
-   * @returns {Array} Array containing `x`- and `y`-coordinates of the
+   * @returns {Object} Object containing `x` and `y` properties of the
    *   point in the PDF coordinate space.
    * @see {@link convertToViewportPoint}
    */
   convertToPdfPoint(x, y) {
-    const p = [x, y];
-    Util.applyInverseTransform(p, this.transform);
-    return p;
+    return Util.applyInverseTransform([x, y], this.transform);
   }
 }
 
 class RenderingCancelledException extends BaseException {
-  constructor(msg, extraDelay = 0) {
+  constructor(msg, type) {
     super(msg, "RenderingCancelledException");
-    this.extraDelay = extraDelay;
+    this.type = type;
   }
 }
 
@@ -321,8 +335,13 @@ function isPdfFile(filename) {
  * @returns {string}
  */
 function getFilenameFromUrl(url) {
-  [url] = url.split(/[#?]/, 1);
-  return url.substring(url.lastIndexOf("/") + 1);
+  const anchor = url.indexOf("#");
+  const query = url.indexOf("?");
+  const end = Math.min(
+    anchor > 0 ? anchor : url.length,
+    query > 0 ? query : url.length
+  );
+  return url.substring(url.lastIndexOf("/", end) + 1, end);
 }
 
 /**
@@ -340,88 +359,38 @@ function getPdfFilenameFromUrl(url, defaultFilename = "document.pdf") {
     warn('getPdfFilenameFromUrl: ignore "data:"-URL for performance reasons.');
     return defaultFilename;
   }
-
-  const getURL = urlString => {
-    try {
-      return new URL(urlString);
-    } catch {
+  const reURI = /^(?:(?:[^:]+:)?\/\/[^/]+)?([^?#]*)(\?[^#]*)?(#.*)?$/;
+  //              SCHEME        HOST        1.PATH  2.QUERY   3.REF
+  // Pattern to get last matching NAME.pdf
+  const reFilename = /[^/?#=]+\.pdf\b(?!.*\.pdf\b)/i;
+  const splitURI = reURI.exec(url);
+  let suggestedFilename =
+    reFilename.exec(splitURI[1]) ||
+    reFilename.exec(splitURI[2]) ||
+    reFilename.exec(splitURI[3]);
+  if (suggestedFilename) {
+    suggestedFilename = suggestedFilename[0];
+    if (suggestedFilename.includes("%")) {
+      // URL-encoded %2Fpath%2Fto%2Ffile.pdf should be file.pdf
       try {
-        return new URL(decodeURIComponent(urlString));
-      } catch {
-        try {
-          // Attempt to parse the URL using the document's base URI.
-          return new URL(urlString, "https://foo.bar");
-        } catch {
-          try {
-            return new URL(decodeURIComponent(urlString), "https://foo.bar");
-          } catch {
-            return null;
-          }
-        }
-      }
-    }
-  };
-
-  const newURL = getURL(url);
-  if (!newURL) {
-    // If the URL is invalid, return the default filename.
-    return defaultFilename;
-  }
-
-  const decode = name => {
-    try {
-      let decoded = decodeURIComponent(name);
-      if (decoded.includes("/")) {
-        decoded = decoded.split("/").at(-1);
-        if (decoded.test(/^\.pdf$/i)) {
-          return decoded;
-        }
-        return name;
-      }
-      return decoded;
-    } catch {
-      return name;
-    }
-  };
-
-  const pdfRegex = /\.pdf$/i;
-  const filename = newURL.pathname.split("/").at(-1);
-  if (pdfRegex.test(filename)) {
-    return decode(filename);
-  }
-
-  if (newURL.searchParams.size > 0) {
-    const values = Array.from(newURL.searchParams.values()).reverse();
-    for (const value of values) {
-      if (pdfRegex.test(value)) {
-        // If any of the search parameters ends with ".pdf", return it.
-        return decode(value);
-      }
-    }
-    const keys = Array.from(newURL.searchParams.keys()).reverse();
-    for (const key of keys) {
-      if (pdfRegex.test(key)) {
-        // If any of the search parameter keys ends with ".pdf", return it.
-        return decode(key);
+        suggestedFilename = reFilename.exec(
+          decodeURIComponent(suggestedFilename)
+        )[0];
+      } catch (ex) {
+        // Possible (extremely rare) errors:
+        // URIError "Malformed URI", e.g. for "%AA.pdf"
+        // TypeError "null has no properties", e.g. for "%2F.pdf"
       }
     }
   }
-
-  if (newURL.hash) {
-    const reFilename = /[^/?#=]+\.pdf\b(?!.*\.pdf\b)/i;
-    const hashFilename = reFilename.exec(newURL.hash);
-    if (hashFilename) {
-      return decode(hashFilename[0]);
-    }
-  }
-
-  return defaultFilename;
+  return suggestedFilename || defaultFilename;
 }
 
 class StatTimer {
-  started = Object.create(null);
-
-  times = [];
+  constructor() {
+    this.started = Object.create(null);
+    this.times = [];
+  }
 
   time(name) {
     if (name in this.started) {
@@ -447,46 +416,61 @@ class StatTimer {
     // Find the longest name for padding purposes.
     const outBuf = [];
     let longest = 0;
-    for (const { name } of this.times) {
-      longest = Math.max(name.length, longest);
+    for (const time of this.times) {
+      const name = time.name;
+      if (name.length > longest) {
+        longest = name.length;
+      }
     }
-    for (const { name, start, end } of this.times) {
-      outBuf.push(`${name.padEnd(longest)} ${end - start}ms\n`);
+    for (const time of this.times) {
+      const duration = time.end - time.start;
+      outBuf.push(`${time.name.padEnd(longest)} ${duration}ms\n`);
     }
     return outBuf.join("");
   }
 }
 
 function isValidFetchUrl(url, baseUrl) {
-  if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
-    throw new Error("Not implemented: isValidFetchUrl");
+  try {
+    const { protocol } = baseUrl ? new URL(url, baseUrl) : new URL(url);
+    // The Fetch API only supports the http/https protocols, and not file/ftp.
+    return protocol === "http:" || protocol === "https:";
+  } catch (ex) {
+    return false; // `new URL()` will throw on incorrect data.
   }
-  const res = baseUrl ? URL.parse(url, baseUrl) : URL.parse(url);
-  // The Fetch API only supports the http/https protocols, and not file/ftp.
-  return res?.protocol === "http:" || res?.protocol === "https:";
 }
 
 /**
- * Event handler to suppress context menu.
+ * @param {string} src
+ * @param {boolean} [removeScriptElement]
+ * @returns {Promise<void>}
  */
-function noContextMenu(e) {
-  e.preventDefault();
-}
+function loadScript(src, removeScriptElement = false) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = src;
 
-function stopEvent(e) {
-  e.preventDefault();
-  e.stopPropagation();
+    script.onload = function (evt) {
+      if (removeScriptElement) {
+        script.remove();
+      }
+      resolve(evt);
+    };
+    script.onerror = function () {
+      reject(new Error(`Cannot load script at: ${script.src}`));
+    };
+    (document.head || document.documentElement).appendChild(script);
+  });
 }
 
 // Deprecated API function -- display regardless of the `verbosity` setting.
 function deprecated(details) {
-  // eslint-disable-next-line no-console
   console.log("Deprecated API usage: " + details);
 }
 
-class PDFDateString {
-  static #regex;
+let pdfDateStringRegex;
 
+class PDFDateString {
   /**
    * Convert a PDF date string to a JavaScript `Date` object.
    *
@@ -504,33 +488,32 @@ class PDFDateString {
    * @returns {Date|null}
    */
   static toDateObject(input) {
-    if (input instanceof Date) {
-      return input;
-    }
     if (!input || typeof input !== "string") {
       return null;
     }
 
     // Lazily initialize the regular expression.
-    this.#regex ||= new RegExp(
-      "^D:" + // Prefix (required)
-        "(\\d{4})" + // Year (required)
-        "(\\d{2})?" + // Month (optional)
-        "(\\d{2})?" + // Day (optional)
-        "(\\d{2})?" + // Hour (optional)
-        "(\\d{2})?" + // Minute (optional)
-        "(\\d{2})?" + // Second (optional)
-        "([Z|+|-])?" + // Universal time relation (optional)
-        "(\\d{2})?" + // Offset hour (optional)
-        "'?" + // Splitting apostrophe (optional)
-        "(\\d{2})?" + // Offset minute (optional)
-        "'?" // Trailing apostrophe (optional)
-    );
+    if (!pdfDateStringRegex) {
+      pdfDateStringRegex = new RegExp(
+        "^D:" + // Prefix (required)
+          "(\\d{4})" + // Year (required)
+          "(\\d{2})?" + // Month (optional)
+          "(\\d{2})?" + // Day (optional)
+          "(\\d{2})?" + // Hour (optional)
+          "(\\d{2})?" + // Minute (optional)
+          "(\\d{2})?" + // Second (optional)
+          "([Z|+|-])?" + // Universal time relation (optional)
+          "(\\d{2})?" + // Offset hour (optional)
+          "'?" + // Splitting apostrophe (optional)
+          "(\\d{2})?" + // Offset minute (optional)
+          "'?" // Trailing apostrophe (optional)
+      );
+    }
 
     // Optional fields that don't satisfy the requirements from the regular
     // expression (such as incorrect digit counts or numbers that are out of
     // range) will fall back the defaults from the specification.
-    const matches = this.#regex.exec(input);
+    const matches = pdfDateStringRegex.exec(input);
     if (!matches) {
       return null;
     }
@@ -579,489 +562,27 @@ function getXfaPageViewport(xfaPage, { scale = 1, rotation = 0 }) {
 
   return new PageViewport({
     viewBox,
-    userUnit: 1,
     scale,
     rotation,
   });
 }
 
-function getRGB(color) {
-  if (color.startsWith("#")) {
-    const colorRGB = parseInt(color.slice(1), 16);
-    return [
-      (colorRGB & 0xff0000) >> 16,
-      (colorRGB & 0x00ff00) >> 8,
-      colorRGB & 0x0000ff,
-    ];
-  }
-
-  if (color.startsWith("rgb(")) {
-    // getComputedStyle(...).color returns a `rgb(R, G, B)` color.
-    return color
-      .slice(/* "rgb(".length */ 4, -1) // Strip out "rgb(" and ")".
-      .split(",")
-      .map(x => parseInt(x));
-  }
-
-  if (color.startsWith("rgba(")) {
-    return color
-      .slice(/* "rgba(".length */ 5, -1) // Strip out "rgba(" and ")".
-      .split(",")
-      .map(x => parseInt(x))
-      .slice(0, 3);
-  }
-
-  warn(`Not a valid color format: "${color}"`);
-  return [0, 0, 0];
-}
-
-function getColorValues(colors) {
-  const span = document.createElement("span");
-  span.style.visibility = "hidden";
-  // NOTE: The following does *not* affect `forced-colors: active` mode.
-  span.style.colorScheme = "only light";
-  document.body.append(span);
-  for (const name of colors.keys()) {
-    span.style.color = name;
-    const computedColor = window.getComputedStyle(span).color;
-    colors.set(name, getRGB(computedColor));
-  }
-  span.remove();
-}
-
-function getCurrentTransform(ctx) {
-  const { a, b, c, d, e, f } = ctx.getTransform();
-  return [a, b, c, d, e, f];
-}
-
-function getCurrentTransformInverse(ctx) {
-  const { a, b, c, d, e, f } = ctx.getTransform().invertSelf();
-  return [a, b, c, d, e, f];
-}
-
-/**
- * @param {HTMLDivElement} div
- * @param {PageViewport} viewport
- * @param {boolean} mustFlip
- * @param {boolean} mustRotate
- */
-function setLayerDimensions(
-  div,
-  viewport,
-  mustFlip = false,
-  mustRotate = true
-) {
-  if (viewport instanceof PageViewport) {
-    const { pageWidth, pageHeight } = viewport.rawDims;
-    const { style } = div;
-    const useRound = FeatureTest.isCSSRoundSupported;
-
-    const w = `var(--total-scale-factor) * ${pageWidth}px`,
-      h = `var(--total-scale-factor) * ${pageHeight}px`;
-    const widthStr = useRound
-        ? `round(down, ${w}, var(--scale-round-x))`
-        : `calc(${w})`,
-      heightStr = useRound
-        ? `round(down, ${h}, var(--scale-round-y))`
-        : `calc(${h})`;
-
-    if (!mustFlip || viewport.rotation % 180 === 0) {
-      style.width = widthStr;
-      style.height = heightStr;
-    } else {
-      style.width = heightStr;
-      style.height = widthStr;
-    }
-  }
-
-  if (mustRotate) {
-    div.setAttribute("data-main-rotation", viewport.rotation);
-  }
-}
-
-/**
- * Scale factors for the canvas, necessary with HiDPI displays.
- */
-class OutputScale {
-  constructor() {
-    const { pixelRatio } = OutputScale;
-
-    /**
-     * @type {number} Horizontal scale.
-     */
-    this.sx = pixelRatio;
-
-    /**
-     * @type {number} Vertical scale.
-     */
-    this.sy = pixelRatio;
-  }
-
-  /**
-   * @type {boolean} Returns `true` when scaling is required, `false` otherwise.
-   */
-  get scaled() {
-    return this.sx !== 1 || this.sy !== 1;
-  }
-
-  /**
-   * @type {boolean} Returns `true` when scaling is symmetric,
-   *   `false` otherwise.
-   */
-  get symmetric() {
-    return this.sx === this.sy;
-  }
-
-  /**
-   * @returns {boolean} Returns `true` if scaling was limited,
-   *   `false` otherwise.
-   */
-  limitCanvas(width, height, maxPixels, maxDim, capAreaFactor = -1) {
-    let maxAreaScale = Infinity,
-      maxWidthScale = Infinity,
-      maxHeightScale = Infinity;
-
-    maxPixels = OutputScale.capPixels(maxPixels, capAreaFactor);
-    if (maxPixels > 0) {
-      maxAreaScale = Math.sqrt(maxPixels / (width * height));
-    }
-    if (maxDim !== -1) {
-      maxWidthScale = maxDim / width;
-      maxHeightScale = maxDim / height;
-    }
-    const maxScale = Math.min(maxAreaScale, maxWidthScale, maxHeightScale);
-
-    if (this.sx > maxScale || this.sy > maxScale) {
-      this.sx = maxScale;
-      this.sy = maxScale;
-      return true;
-    }
-    return false;
-  }
-
-  static get pixelRatio() {
-    return globalThis.devicePixelRatio || 1;
-  }
-
-  static capPixels(maxPixels, capAreaFactor) {
-    if (capAreaFactor >= 0) {
-      const winPixels = Math.ceil(
-        (typeof PDFJSDev !== "undefined" && PDFJSDev.test("TESTING")
-          ? window.innerWidth * window.innerHeight
-          : window.screen.availWidth * window.screen.availHeight) *
-          this.pixelRatio ** 2 *
-          (1 + capAreaFactor / 100)
-      );
-      return maxPixels > 0 ? Math.min(maxPixels, winPixels) : winPixels;
-    }
-    return maxPixels;
-  }
-}
-
-// See https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Image_types
-// to know which types are supported by the browser.
-const SupportedImageMimeTypes = [
-  "image/apng",
-  "image/avif",
-  "image/bmp",
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/svg+xml",
-  "image/webp",
-  "image/x-icon",
-];
-
-class ColorScheme {
-  static get isDarkMode() {
-    return shadow(
-      this,
-      "isDarkMode",
-      !!window?.matchMedia?.("(prefers-color-scheme: dark)").matches
-    );
-  }
-}
-
-class CSSConstants {
-  static get commentForegroundColor() {
-    const element = document.createElement("span");
-    element.classList.add("comment", "sidebar");
-    const { style } = element;
-    style.width = style.height = "0";
-    style.display = "none";
-    style.color = "var(--comment-fg-color)";
-    document.body.append(element);
-    const { color } = window.getComputedStyle(element);
-    element.remove();
-    return shadow(this, "commentForegroundColor", getRGB(color));
-  }
-}
-
-function applyOpacity(r, g, b, opacity) {
-  opacity = Math.min(Math.max(opacity ?? 1, 0), 1);
-  const white = 255 * (1 - opacity);
-  r = Math.round(r * opacity + white);
-  g = Math.round(g * opacity + white);
-  b = Math.round(b * opacity + white);
-  return [r, g, b];
-}
-
-function RGBToHSL(rgb, output) {
-  const r = rgb[0] / 255;
-  const g = rgb[1] / 255;
-  const b = rgb[2] / 255;
-
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-
-  if (max === min) {
-    // achromatic
-    output[0] = output[1] = 0; // hue and saturation are 0
-  } else {
-    const d = max - min;
-    output[1] = l < 0.5 ? d / (max + min) : d / (2 - max - min);
-    // hue
-    switch (max) {
-      case r:
-        output[0] = ((g - b) / d + (g < b ? 6 : 0)) * 60;
-        break;
-      case g:
-        output[0] = ((b - r) / d + 2) * 60;
-        break;
-      case b:
-        output[0] = ((r - g) / d + 4) * 60;
-        break;
-    }
-  }
-  output[2] = l;
-}
-
-function HSLToRGB(hsl, output) {
-  const h = hsl[0];
-  const s = hsl[1];
-  const l = hsl[2];
-  const c = (1 - Math.abs(2 * l - 1)) * s; // chroma
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = l - c / 2;
-
-  switch (Math.floor(h / 60)) {
-    case 0:
-      output[0] = c + m;
-      output[1] = x + m;
-      output[2] = m;
-      break;
-    case 1:
-      output[0] = x + m;
-      output[1] = c + m;
-      output[2] = m;
-      break;
-    case 2:
-      output[0] = m;
-      output[1] = c + m;
-      output[2] = x + m;
-      break;
-    case 3:
-      output[0] = m;
-      output[1] = x + m;
-      output[2] = c + m;
-      break;
-    case 4:
-      output[0] = x + m;
-      output[1] = m;
-      output[2] = c + m;
-      break;
-    case 5:
-    case 6:
-      output[0] = c + m;
-      output[1] = m;
-      output[2] = x + m;
-      break;
-  }
-}
-
-function computeLuminance(x) {
-  return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
-}
-
-function contrastRatio(hsl1, hsl2, output) {
-  HSLToRGB(hsl1, output);
-  output.map(computeLuminance);
-  const lum1 = 0.2126 * output[0] + 0.7152 * output[1] + 0.0722 * output[2];
-  HSLToRGB(hsl2, output);
-  output.map(computeLuminance);
-  const lum2 = 0.2126 * output[0] + 0.7152 * output[1] + 0.0722 * output[2];
-  return lum1 > lum2
-    ? (lum1 + 0.05) / (lum2 + 0.05)
-    : (lum2 + 0.05) / (lum1 + 0.05);
-}
-
-// Cache for the findContrastColor function, to improve performance.
-const contrastCache = new Map();
-
-/**
- * Find a color that has sufficient contrast against a fixed color.
- * The luminance (in HSL color space) of the base color is adjusted
- * until the contrast ratio between the base color and the fixed color
- * is at least the minimum contrast ratio required by WCAG 2.1.
- * @param {Array<number>} baseColor
- * @param {Array<number>} fixedColor
- * @returns {string}
- */
-function findContrastColor(baseColor, fixedColor) {
-  const key =
-    baseColor[0] +
-    baseColor[1] * 0x100 +
-    baseColor[2] * 0x10000 +
-    fixedColor[0] * 0x1000000 +
-    fixedColor[1] * 0x100000000 +
-    fixedColor[2] * 0x10000000000;
-  let cachedValue = contrastCache.get(key);
-  if (cachedValue) {
-    return cachedValue;
-  }
-  const array = new Float32Array(9);
-  const output = array.subarray(0, 3);
-  const baseHSL = array.subarray(3, 6);
-  RGBToHSL(baseColor, baseHSL);
-  const fixedHSL = array.subarray(6, 9);
-  RGBToHSL(fixedColor, fixedHSL);
-  const isFixedColorDark = fixedHSL[2] < 0.5;
-
-  // Use the contrast ratio requirements from WCAG 2.1.
-  // https://www.w3.org/TR/WCAG21/#contrast-minimum
-  // https://www.w3.org/TR/WCAG21/#contrast-enhanced
-  const minContrast = isFixedColorDark ? 12 : 4.5;
-
-  baseHSL[2] = isFixedColorDark
-    ? Math.sqrt(baseHSL[2])
-    : 1 - Math.sqrt(1 - baseHSL[2]);
-
-  if (contrastRatio(baseHSL, fixedHSL, output) < minContrast) {
-    let start, end;
-    if (isFixedColorDark) {
-      start = baseHSL[2];
-      end = 1;
-    } else {
-      start = 0;
-      end = baseHSL[2];
-    }
-    const PRECISION = 0.005;
-    while (end - start > PRECISION) {
-      const mid = (baseHSL[2] = (start + end) / 2);
-      if (
-        isFixedColorDark ===
-        contrastRatio(baseHSL, fixedHSL, output) < minContrast
-      ) {
-        start = mid;
-      } else {
-        end = mid;
-      }
-    }
-    baseHSL[2] = isFixedColorDark ? end : start;
-  }
-
-  HSLToRGB(baseHSL, output);
-  cachedValue = Util.makeHexColor(
-    Math.round(output[0] * 255),
-    Math.round(output[1] * 255),
-    Math.round(output[2] * 255)
-  );
-  contrastCache.set(key, cachedValue);
-  return cachedValue;
-}
-
-function renderRichText({ html, dir, className }, container) {
-  const fragment = document.createDocumentFragment();
-  if (typeof html === "string") {
-    const p = document.createElement("p");
-    p.dir = dir || "auto";
-    const lines = html.split(/(?:\r\n?|\n)/);
-    for (let i = 0, ii = lines.length; i < ii; ++i) {
-      const line = lines[i];
-      p.append(document.createTextNode(line));
-      if (i < ii - 1) {
-        p.append(document.createElement("br"));
-      }
-    }
-    fragment.append(p);
-  } else {
-    XfaLayer.render({
-      xfaHtml: html,
-      div: fragment,
-      intent: "richText",
-    });
-  }
-  fragment.firstChild.classList.add("richText", className);
-  container.append(fragment);
-}
-
-function makePathFromDrawOPS(data) {
-  // Using a SVG string is slightly slower than using the following loop.
-  const path = new Path2D();
-  if (!data) {
-    return path;
-  }
-  for (let i = 0, ii = data.length; i < ii; ) {
-    switch (data[i++]) {
-      case DrawOPS.moveTo:
-        path.moveTo(data[i++], data[i++]);
-        break;
-      case DrawOPS.lineTo:
-        path.lineTo(data[i++], data[i++]);
-        break;
-      case DrawOPS.curveTo:
-        path.bezierCurveTo(
-          data[i++],
-          data[i++],
-          data[i++],
-          data[i++],
-          data[i++],
-          data[i++]
-        );
-        break;
-      case DrawOPS.quadraticCurveTo:
-        path.quadraticCurveTo(data[i++], data[i++], data[i++], data[i++]);
-        break;
-      case DrawOPS.closePath:
-        path.closePath();
-        break;
-      default:
-        warn(`Unrecognized drawing path operator: ${data[i - 1]}`);
-        break;
-    }
-  }
-  return path;
-}
-
 export {
-  applyOpacity,
-  ColorScheme,
-  CSSConstants,
   deprecated,
-  fetchData,
-  findContrastColor,
-  getColorValues,
-  getCurrentTransform,
-  getCurrentTransformInverse,
+  DOMCanvasFactory,
+  DOMCMapReaderFactory,
+  DOMStandardFontDataFactory,
+  DOMSVGFactory,
   getFilenameFromUrl,
   getPdfFilenameFromUrl,
-  getRGB,
   getXfaPageViewport,
   isDataScheme,
   isPdfFile,
   isValidFetchUrl,
-  makePathFromDrawOPS,
-  noContextMenu,
-  OutputScale,
+  loadScript,
   PageViewport,
   PDFDateString,
   PixelsPerInch,
   RenderingCancelledException,
-  renderRichText,
-  setLayerDimensions,
   StatTimer,
-  stopEvent,
-  SupportedImageMimeTypes,
-  SVG_NS,
 };

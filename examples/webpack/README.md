@@ -27,7 +27,12 @@ otherwise the build is not guaranteed to work correctly.
 ## Worker loading
 
 If you are getting the `Setting up fake worker` warning, make sure you are
-importing `pdfjs-dist/webpack.mjs` which is the zero-configuration method for
-Webpack users. Installing `worker-loader` is no longer necessary.
+importing `pdfjs-dist/webpack` which is the zero-configuration method for
+Webpack users. You will need to install
+[worker-loader](https://github.com/webpack-contrib/worker-loader) (version 3.0.0 or higher is required), as a
+dependency in your project in order to use `pdfjs-dist/webpack` (configuring
+`worker-loader` is not necessary; just installing it is sufficient).
 
-    import * as pdfjsLib from 'pdfjs-dist/webpack.mjs';
+    import * as pdfjsLib from 'pdfjs-dist/webpack';
+
+For a full working example refer to [this repository](https://github.com/yurydelendik/pdfjs-react).

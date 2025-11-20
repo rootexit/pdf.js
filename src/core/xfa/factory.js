@@ -20,7 +20,7 @@ import {
   $text,
   $toHTML,
   $toPages,
-} from "./symbol_utils.js";
+} from "./xfa_object.js";
 import { Binder } from "./bind.js";
 import { DataHandler } from "./data.js";
 import { FontFinder } from "./fonts.js";
@@ -43,7 +43,7 @@ class XFAFactory {
   }
 
   isValid() {
-    return !!(this.root && this.form);
+    return this.root && this.form;
   }
 
   /**

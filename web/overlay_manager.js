@@ -37,11 +37,32 @@ class OverlayManager {
     }
     this.#overlays.set(dialog, { canForceClose });
 
-    dialog.addEventListener("cancel", ({ target }) => {
-      if (this.#active === target) {
-        this.#active = null;
-      }
+    if (
+      typeof PDFJSDev !== "undefined" &&
+      PDFJSDev.test("GENERIC && !SKIP_BABEL") &&
+      !dialog.showModal
+    ) {
+      const dialogPolyfill = require("dialog-polyfill/dist/dialog-polyfill.js");
+      dialogPolyfill.registerDialog(dialog);
+    }
+
+    dialog.addEventListener("cancel", evt => {
+      this.#active = null;
     });
+  }
+
+  /**
+   * @param {HTMLDialogElement} dialog - The overlay's DOM element.
+   * @returns {Promise} A promise that is resolved when the overlay has been
+   *                    unregistered.
+   */
+  async unregister(dialog) {
+    if (!this.#overlays.has(dialog)) {
+      throw new Error("The overlay does not exist.");
+    } else if (this.#active === dialog) {
+      throw new Error("The overlay cannot be removed while it is active.");
+    }
+    this.#overlays.delete(dialog);
   }
 
   /**
@@ -80,17 +101,6 @@ class OverlayManager {
     }
     dialog.close();
     this.#active = null;
-  }
-
-  /**
-   * @param {HTMLDialogElement} dialog - The overlay's DOM element.
-   * @returns {Promise} A promise that is resolved when the overlay has been
-   *                    closed.
-   */
-  async closeIfActive(dialog) {
-    if (this.#active === dialog) {
-      await this.close(dialog);
-    }
   }
 }
 

@@ -42,35 +42,8 @@ limitations under the License.
     return;
   }
 
-  // The localStorage API is unavailable in service workers. We store data in
-  // chrome.storage.local and use this "localStorage" object to enable
-  // synchronous access in the logic.
-  const localStorage = {
-    telemetryLastTime: 0,
-    telemetryDeduplicationId: "",
-    telemetryLastVersion: "",
-  };
-
-  chrome.alarms.onAlarm.addListener(alarm => {
-    if (alarm.name === "maybeSendPing") {
-      maybeSendPing();
-    }
-  });
-  chrome.storage.session.get({ didPingCheck: false }, async items => {
-    if (items?.didPingCheck) {
-      return;
-    }
-    maybeSendPing();
-    await chrome.alarms.clear("maybeSendPing");
-    await chrome.alarms.create("maybeSendPing", { periodInMinutes: 60 });
-    chrome.storage.session.set({ didPingCheck: true });
-  });
-
-  function updateLocalStorage(key, value) {
-    localStorage[key] = value;
-    // Note: We mirror the data in localStorage because the following is async.
-    chrome.storage.local.set({ [key]: value });
-  }
+  maybeSendPing();
+  setInterval(maybeSendPing, 36e5);
 
   function maybeSendPing() {
     getLoggingPref(function (didOptOut) {
@@ -88,37 +61,38 @@ limitations under the License.
         // send more pings.
         return;
       }
-      doSendPing();
-    });
-  }
-
-  function doSendPing() {
-    chrome.storage.local.get(localStorage, items => {
-      Object.assign(localStorage, items);
-
       var lastTime = parseInt(localStorage.telemetryLastTime) || 0;
       var wasUpdated = didUpdateSinceLastCheck();
       if (!wasUpdated && Date.now() - lastTime < MINIMUM_TIME_BETWEEN_PING) {
         return;
       }
-      updateLocalStorage("telemetryLastTime", Date.now());
+      localStorage.telemetryLastTime = Date.now();
 
       var deduplication_id = getDeduplicationId(wasUpdated);
       var extension_version = chrome.runtime.getManifest().version;
-      fetch(LOG_URL, {
-        method: "POST",
-        headers: new Headers({
-          "Deduplication-Id": deduplication_id,
-          "Extension-Version": extension_version,
-        }),
-        // Set mode=cors so that the above custom headers are included in the
-        // request.
-        mode: "cors",
-        // Omits credentials such as cookies in the requests, which guarantees
-        // that the server cannot track the client via HTTP cookies.
-        credentials: "omit",
-        cache: "no-store",
-      });
+      if (window.Request && "mode" in Request.prototype) {
+        // fetch is supported in extensions since Chrome 42 (though the above
+        // feature-detection method detects Chrome 43+).
+        // Unlike XMLHttpRequest, fetch omits credentials such as cookies in the
+        // requests, which guarantees that the server cannot track the client
+        // via HTTP cookies.
+        fetch(LOG_URL, {
+          method: "POST",
+          headers: new Headers({
+            "Deduplication-Id": deduplication_id,
+            "Extension-Version": extension_version,
+          }),
+          // Set mode=cors so that the above custom headers are included in the
+          // request.
+          mode: "cors",
+        });
+        return;
+      }
+      var x = new XMLHttpRequest();
+      x.open("POST", LOG_URL);
+      x.setRequestHeader("Deduplication-Id", deduplication_id);
+      x.setRequestHeader("Extension-Version", extension_version);
+      x.send();
     });
   }
 
@@ -136,10 +110,11 @@ limitations under the License.
       id = "";
       var buf = new Uint8Array(5);
       crypto.getRandomValues(buf);
-      for (const c of buf) {
+      for (var i = 0; i < buf.length; ++i) {
+        var c = buf[i];
         id += (c >>> 4).toString(16) + (c & 0xf).toString(16);
       }
-      updateLocalStorage("telemetryDeduplicationId", id);
+      localStorage.telemetryDeduplicationId = id;
     }
     return id;
   }
@@ -154,7 +129,7 @@ limitations under the License.
     if (!chromeVersion || localStorage.telemetryLastVersion === chromeVersion) {
       return false;
     }
-    updateLocalStorage("telemetryLastVersion", chromeVersion);
+    localStorage.telemetryLastVersion = chromeVersion;
     return true;
   }
 
